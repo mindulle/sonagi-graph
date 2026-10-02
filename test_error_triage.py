@@ -6,7 +6,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from graphs.error_triage_graph import build_error_triage_graph
 
 def run_test():
-    print("=== 🛠️ Error Triage Workflow 테스트 ===")
+    print("=== 🛠️ Error Triage Graph 테스트 ===")
     graph = build_error_triage_graph()
     
     # 1. 테스트용 가짜 에러 로그 입력

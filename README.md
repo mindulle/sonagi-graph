@@ -1,6 +1,6 @@
-# Sonagi Workflows
+# Sonagi Graph
 
-Sonagi 생태계의 다양한 에이전틱 워크플로우(Agentic Workflows)를 정의하고 관리하는 독립 저장소입니다.
+Sonagi 생태계의 다양한 에이전틱 그래프(Agentic Graphs)를 정의하고 관리하는 독립 저장소입니다.
 
 ## 아키텍처 개요
 - **LangGraph** 기반의 Python 코드로 워크플로우를 설계합니다.

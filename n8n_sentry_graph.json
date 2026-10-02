@@ -1,5 +1,5 @@
 {
-  "name": "[Sonagi-Workflows] Sentry to LangGraph Triage",
+  "name": "[Sonagi-Graph] Sentry to LangGraph Triage",
   "nodes": [
     {
       "parameters": {

@@ -1,5 +1,5 @@
 {
-  "name": "[Sonagi-Workflows] LangGraph Result to Discord",
+  "name": "[Sonagi-Graph] LangGraph Result to Discord",
   "nodes": [
     {
       "parameters": {

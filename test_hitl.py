@@ -75,7 +75,7 @@ def request_paperclip_approval(message_content: str):
         print(f"❌ [Paperclip API] 승인 요청 중 오류 발생: {e}")
         return False
 
-def run_hitl_workflow():
+def run_hitl_graph():
     print("=== 🚀 LangGraph HITL x Paperclip API 연동 테스트 시작 ===")
     graph = build_graph()
     
@@ -115,4 +115,4 @@ def run_hitl_workflow():
             print("\n🚨 작업이 취소되어 그래프 실행을 종료합니다.")
 
 if __name__ == "__main__":
-    run_hitl_workflow()
+    run_hitl_graph()
