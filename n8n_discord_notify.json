@@ -16,7 +16,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://discord.com/api/webhooks/여기에_디스코드_웹훅_URL을_넣으세요",
+        "url": "https://discord.com/api/webhooks/1547874538006781974/N4s030quOINZE_pX1cAEwTqB60-dOoxQcUUykDwXkokjWFeSWnHO1KHgMXFmCIV40Ebv",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"content\": \"{{ $json.body.report }}\"\n}",
