@@ -2,7 +2,8 @@
   "dependencies": ["."],
   "env": ".env",
   "graphs": {
-    "spike_test": "./graphs/spike_test_graph.py:graph"
+    "spike_test": "./graphs/spike_test_graph.py:graph",
+    "error_triage": "./graphs/error_triage_graph.py:graph"
   },
   "python_version": "3.11"
 }

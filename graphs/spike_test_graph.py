@@ -1,27 +1,39 @@
-from langchain_core.messages import SystemMessage
-from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, START, END, MessagesState
+import uuid
+from typing import Annotated, TypedDict
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.checkpoint.memory import MemorySaver
 
-# CLIProxyAPI를 거쳐 로컬 모델 사용
-llm = ChatOpenAI(model="gemini-3.1-pro-low", temperature=0)
+class AgentState(TypedDict):
+    messages: Annotated[list, add_messages]
 
-def plan_action(state: MessagesState):
-    sys_msg = SystemMessage(content="사용자의 요청을 분석해서 어떻게 해결할지 1~2줄로 계획을 세우세요. 실제 행동은 아직 하지 마세요.")
-    response = llm.invoke([sys_msg] + state["messages"])
-    return {"messages": [response]}
+def plan_node(state: AgentState):
+    print("🤖 [Node: plan_node] 분석 및 계획 수립 중...")
+    return {"messages": [AIMessage(content="중요한 작업(예: DB 삭제 또는 결제)을 수행할 계획입니다. 승인이 필요합니다.")]}
 
-def execute_action(state: MessagesState):
-    sys_msg = SystemMessage(content="위의 계획을 최종적으로 실행에 옮기고 결과를 보고하세요.")
-    response = llm.invoke([sys_msg] + state["messages"])
-    return {"messages": [response]}
+def execute_node(state: AgentState):
+    print("🤖 [Node: execute_node] 승인 확인 완료. 위험한 작업 실행 중...")
+    return {"messages": [AIMessage(content="작업이 안전하게 완료되었습니다.")]}
 
-# 그래프 조립
-builder = StateGraph(MessagesState)
-builder.add_node("plan_action", plan_action)
-builder.add_node("execute_action", execute_action)
-builder.add_edge(START, "plan_action")
-builder.add_edge("plan_action", "execute_action")
-builder.add_edge("execute_action", END)
+def build_graph():
+    builder = StateGraph(AgentState)
+    builder.add_node("plan", plan_node)
+    builder.add_node("execute", execute_node)
 
-# 사람의 개입 대기(HITL) 지점 명시
-graph = builder.compile(interrupt_before=["execute_action"])
+    builder.add_edge(START, "plan")
+    builder.add_edge("plan", "execute")
+    builder.add_edge("execute", END)
+
+    # 메모리 세이버가 있어야 스레드 상태를 저장하고 interrupt/resume이 가능합니다.
+    memory = MemorySaver()
+    
+    # execute 노드 진입 직전에 실행을 중단(interrupt)합니다.
+    graph = builder.compile(
+        checkpointer=memory,
+        interrupt_before=["execute"]
+    )
+    return graph
+
+# LangGraph Server용 진입점
+graph = build_graph()
