@@ -9,9 +9,9 @@ class IntelligenceState(TypedDict):
     """
     시장 조사 파이프라인의 상태를 정의합니다.
     """
-    raw_data: List[Dict[str, Any]]
-    analyzed_data: List[Dict[str, Any]]
-    errors: List[str]
+    raw_data: Annotated[List[Dict[str, Any]], operator.add]
+    analyzed_data: Annotated[List[Dict[str, Any]], operator.add]
+    errors: Annotated[List[str], operator.add]
     status: str # "collecting", "analyzing", "loading", "completed", "failed"
 
 # 2. Nodes
@@ -28,7 +28,7 @@ def collector_node(state: IntelligenceState) -> IntelligenceState:
         {"source": "aliexpress", "product": "Mini PC for AI", "price": 199.99}
     ]
     return {
-        "raw_data": state.get("raw_data", []) + raw_data,
+        "raw_data": raw_data,  # Reducer가 자동 병합하므로 새 데이터만 반환
         "status": "collecting"
     }
 
