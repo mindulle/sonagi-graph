@@ -2,110 +2,84 @@ import operator
 from typing import Annotated, TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langgraph.types import Send
 import json
 
 # 1. State Definition
 class IntelligenceState(TypedDict):
-    """
-    시장 조사 파이프라인의 상태를 정의합니다.
-    """
+    """시장 조사 파이프라인의 상태를 정의합니다."""
+    targets: List[str]  # 조사할 소스나 키워드 목록
     raw_data: Annotated[List[Dict[str, Any]], operator.add]
     analyzed_data: Annotated[List[Dict[str, Any]], operator.add]
     errors: Annotated[List[str], operator.add]
-    status: str # "collecting", "analyzing", "loading", "completed", "failed"
+    status: str
+
+# 개별 Collector 에이전트가 받을 하위 상태(Sub-state)
+class TargetState(TypedDict):
+    target: str
 
 # 2. Nodes
-def collector_node(state: IntelligenceState) -> IntelligenceState:
+def dispatcher_node(state: IntelligenceState) -> IntelligenceState:
     """
-    [Collector Node]
-    네이버 검색어 API, 레딧(RSS), 알리익스프레스 API 등을 호출하여 원시 데이터를 수집합니다.
+    [Dispatcher Node]
+    어떤 소스들을 조사할지 결정하는 분배기 역할을 합니다.
     """
-    print("[Collector] Fetching raw data from various sources...")
+    print("[Dispatcher] Planning research targets...")
+    # 실제로는 여기서 LLM이 어떤 키워드를 검색할지 동적으로 리스트를 만듭니다.
+    targets = ["naver", "reddit", "aliexpress"] 
+    return {"targets": targets, "status": "dispatching"}
+
+def collector_node(state: TargetState) -> IntelligenceState:
+    """
+    [Collector Node - 동적 생성됨]
+    전달받은 단일 타겟(소스)에 대해서만 전담하여 수집을 진행합니다. (여러 개가 병렬로 실행됨)
+    """
+    target = state["target"]
+    print(f"[Collector] 🚀 Fetching data exclusively for target: {target}...")
+    
     # Mock data collection
-    raw_data = [
-        {"source": "naver", "keyword": "AI 에이전트", "volume": 15000},
-        {"source": "reddit", "topic": "Local LLM trends", "sentiment": "positive"},
-        {"source": "aliexpress", "product": "Mini PC for AI", "price": 199.99}
-    ]
-    return {
-        "raw_data": raw_data,  # Reducer가 자동 병합하므로 새 데이터만 반환
-        "status": "collecting"
-    }
+    new_raw_data = [{"source": target, "info": f"sample data from {target}"}]
+    
+    # Reducer가 있으므로 자신(에이전트)이 수집한 데이터만 반환하면 자동으로 취합(Fan-in)됩니다.
+    return {"raw_data": new_raw_data, "status": f"collected_{target}"}
 
 def analyzer_node(state: IntelligenceState) -> IntelligenceState:
-    """
-    [Analyzer Node]
-    수집된 원시 데이터를 LLM에 통과시켜 제휴 마케팅 글감으로서의 유효성을 판단하고 노이즈를 제거합니다.
-    """
-    print("[Analyzer] Processing raw data with LLM...")
-    raw_data = state.get("raw_data", [])
-    analyzed_data = []
-    
-    # Mock LLM processing
-    for item in raw_data:
-        # In real scenario, use LangChain LLM to parse and filter
-        item["intent_score"] = 0.85 if "AI" in str(item) else 0.4
-        item["is_valid"] = item["intent_score"] > 0.7
-        if item["is_valid"]:
-            analyzed_data.append(item)
-            
-    return {
-        "analyzed_data": analyzed_data,
-        "status": "analyzing"
-    }
+    """[Analyzer Node] 수집된 모든 데이터를 분석합니다."""
+    print(f"[Analyzer] Processing {len(state.get('raw_data', []))} raw data items...")
+    # Mock analysis
+    analyzed_data = [{"result": "filtered data", "count": len(state.get('raw_data', []))}]
+    return {"analyzed_data": analyzed_data, "status": "analyzing"}
 
 def loader_node(state: IntelligenceState) -> IntelligenceState:
-    """
-    [Loader Node]
-    정제 완료된 데이터를 mindullemonitor2(100.69.255.15) 서버의 SQLite DB에 적재합니다.
-    """
+    """[Loader Node] 정제 완료된 데이터를 DB에 적재합니다."""
     print("[Loader] Loading analyzed data into SQLite DB for Metabase...")
-    analyzed_data = state.get("analyzed_data", [])
-    # Mock DB insertion
-    print(f"-> Inserted {len(analyzed_data)} records into SQLite.")
-    
-    return {
-        "status": "completed"
-    }
+    return {"status": "completed"}
 
-# 3. Router (Conditional Edges)
-def check_quality(state: IntelligenceState) -> str:
+# 3. Router (Map-Reduce 맵핑 함수)
+def continue_to_collectors(state: IntelligenceState):
     """
-    데이터 품질을 체크하여 흐름을 통제하는 Supervisor 역할을 합니다.
+    타겟 리스트의 개수만큼 Send 객체를 반환하여, 
+    'collector' 노드를 동적으로 여러 개 띄웁니다 (Fan-out).
     """
-    if state.get("errors"):
-        return "error"
-    if len(state.get("analyzed_data", [])) == 0:
-        return "retry_collect"
-    return "proceed"
+    return [Send("collector", {"target": t}) for t in state["targets"]]
 
 # 4. Graph Construction
 builder = StateGraph(IntelligenceState)
 
 # Add Nodes
+builder.add_node("dispatcher", dispatcher_node)
 builder.add_node("collector", collector_node)
 builder.add_node("analyzer", analyzer_node)
 builder.add_node("loader", loader_node)
 
-# Set Entry Point
-builder.set_entry_point("collector")
+builder.set_entry_point("dispatcher")
 
-# Add Edges
+# Dispatcher 이후 조건부 엣지를 통해 Send(동적 병렬 실행)를 발생시킵니다.
+builder.add_conditional_edges("dispatcher", continue_to_collectors, ["collector"])
+
+# 여러 개의 collector가 모두 종료되면, 자동으로 analyzer로 넘어갑니다. (Fan-in)
 builder.add_edge("collector", "analyzer")
-
-# Conditional Routing from Analyzer
-builder.add_conditional_edges(
-    "analyzer",
-    check_quality,
-    {
-        "proceed": "loader",
-        "retry_collect": "collector", # Not enough good data, collect more
-        "error": END
-    }
-)
-
-# End the graph after loading
+builder.add_edge("analyzer", "loader")
 builder.add_edge("loader", END)
 
-# Compile the graph
 graph = builder.compile()
