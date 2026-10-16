@@ -6,7 +6,8 @@
   "graphs": {
     "spike_test": "./graphs/spike_test_graph.py:graph",
     "error_triage": "./graphs/error_triage_graph.py:graph",
-    "market_intelligence": "./graphs/market_intelligence_graph.py:graph"
+    "market_intelligence": "./graphs/market_intelligence_graph.py:graph",
+    "design_ops": "./graphs/design_ops_graph.py:graph"
   },
   "python_version": "3.11"
 }
