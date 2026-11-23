@@ -95,4 +95,24 @@ graph.invoke(None, config)
 - 린트 점수 = 100 − 25×fail − 5×warn, 동점이면 브리프 적합도로 정렬
 - FAIL은 선택지에서 빠진다. 남는 후보가 없으면 그래프가 멈춘다
 - 레퍼런스는 `license_scope`가 `bundle`/`output`인 것만. `blocked`·junk는 제외
-- 스카우트 결과는 `scout` 결정으로 원장에 남는다(`8건: 이름, 이름, ...`)
+- 스카우트 결과는 `scout` 결정으로 원장에 남는다(`8건 [illustration:3,icon:3,typography:2]: 이름, ...`)
+
+### 레퍼런스 스카우트 (주제어 + 역할 쿼터)
+
+톤 사전은 스타일 후보에만 쓴다. 레퍼런스는 실카탈로그에 톤 태그가 없어서
+톤으로 고르면 `Archivo`(arch) · `border-none`(none) 같은 오매칭만 남는다.
+
+1. 브리프에서 주제 명사를 뽑아 `TOPIC_LEXICON`으로 영문 주제어로 옮긴다
+   (`민들레 홀씨 유리 문진` → dandelion · seed · glass · paperweight).
+   톤·매체 단어(미니멀·랜딩·인쇄물·포스터)는 주제어가 아니다.
+2. 카탈로그 `name`·`topics`·주제 태그를 **토큰 집합**으로 비교한다. 부분 문자열은
+   쓰지 않는다(`arch` ≠ `Archivo`). 4자 이하 일반어(`none`·`rule`·`deco`)는 버린다.
+3. 역할 쿼터를 채운다: illustration 3 · icon 3 · typography 2 (최대 8건).
+   슬롯을 못 채우면 다른 역할로 메우지 않고 `shortfall`에 이유를 남긴다.
+
+```python
+import craft
+report = craft.scout_references(craft.parse_brief("민들레 홀씨 유리 문진"), items)
+report["references"]   # name·role·score·matched·reason
+report["shortfall"]    # [{role, wanted, got, reason}]
+```

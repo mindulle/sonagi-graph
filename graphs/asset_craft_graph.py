@@ -55,6 +55,7 @@ class CraftState(TypedDict):
     brief: Any
     ir: Dict[str, Any]
     references: List[Dict[str, Any]]
+    scout_report: Dict[str, Any]
     content: str
     recipe: Optional[str]
     variants: List[Dict[str, Any]]
@@ -99,8 +100,24 @@ def scout_node(state: CraftState) -> Dict[str, Any]:
     ir = state.get("ir") or craft.parse_brief(state.get("brief", ""))
     catalog = Path(os.environ.get("SONAGI_CATALOG", str(CATALOG)))
     items = json.loads(catalog.read_text()).get("items", [])
-    references = craft.select_references(ir, items, limit=int(os.environ.get("SONAGI_CRAFT_REFS", 8)))
-    return {"references": references, "status": "scouted"}
+    report = craft.scout_references(
+        ir, items, limit=int(os.environ.get("SONAGI_CRAFT_REFS", craft.REF_LIMIT))
+    )
+    shortfall = report.get("shortfall") or []
+    notes = "; ".join(row["reason"] for row in shortfall) if shortfall else "쿼터 충족"
+    return {
+        "references": report["references"],
+        "scout_report": report,
+        "status": "scouted",
+        "messages": [
+            AIMessage(
+                content=(
+                    f"레퍼런스 {len(report['references'])}건 "
+                    f"(주제어 {'/'.join(report['terms']) or '없음'}) — {notes}"
+                )
+            )
+        ],
+    }
 
 
 def compose_node(state: CraftState) -> Dict[str, Any]:
@@ -218,8 +235,22 @@ def approve_node(state: CraftState) -> Dict[str, Any]:
     references = state.get("references") or []
     if references:
         names = ", ".join(str(ref.get("name")) for ref in references[:6])
-        args += ["--decision", f"scout={len(references)}건: {names}"]
-    args += ["--by", os.environ.get("SONAGI_CRAFT_BY", "craft-graph"), "--out", str(ledger)]
+        roles = ",".join(
+            f"{role}:{count}"
+            for role, count in (state.get("scout_report") or {})
+            .get("filled", {})
+            .items()
+        )
+        suffix = f" [{roles}]" if roles else ""
+        args += ["--decision", f"scout={len(references)}건{suffix}: {names}"]
+    else:
+        args += ["--decision", "scout=0건: 주제어 일치 없음"]
+    args += [
+        "--by",
+        os.environ.get("SONAGI_CRAFT_BY", "craft-graph"),
+        "--out",
+        str(ledger),
+    ]
     _run(args)
     return {
         "selection": chosen["id"],
