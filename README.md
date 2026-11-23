@@ -62,8 +62,8 @@ brand.stroke_px("border-hairline") # 1.0
 린터로 재고, 사람이 고른 뒤 결정 원장을 남긴다. LLM은 픽셀을 만지지 않는다.
 
 ```
-brief ──▶ compose ──▶ render(변주 3) ──▶ critic ──▶ select ──▶ [사람] ──▶ approve
- IR        스타일 후보      SVG+manifest      lint 점수      상위 3안       원장
+brief ──▶ scout ──▶ compose ──▶ render(변주 3) ──▶ critic ──▶ select ──▶ [사람] ──▶ approve
+ IR        참고 자산     스타일 후보      SVG+manifest      lint 점수      상위 3안       원장
 ```
 
 ```python
@@ -86,6 +86,7 @@ graph.invoke(None, config)
 | `SONAGI_ASSETS_DIR` | `/home/ubuntu/sonagi-assets` | 렌더러·린터·명부가 있는 곳 |
 | `SONAGI_CATALOG` | `<assets>/test_data/golden/catalog.json` | 자산 카탈로그 |
 | `SONAGI_CRAFT_OUT` | `/tmp/asset_craft` | 변주 출력 루트 |
+| `SONAGI_CRAFT_REFS` | `8` | 스카우트가 고를 참고 자산 수 |
 
 판단 로직은 `craft.py`에 있고 LangGraph에 의존하지 않는다(`test_craft.py`).
 
@@ -93,3 +94,5 @@ graph.invoke(None, config)
 - 스타일 점수 = 톤 가중치 × 축 가중치(palette 3 · type 2 · layout 2 · ornament 1)
 - 린트 점수 = 100 − 25×fail − 5×warn, 동점이면 브리프 적합도로 정렬
 - FAIL은 선택지에서 빠진다. 남는 후보가 없으면 그래프가 멈춘다
+- 레퍼런스는 `license_scope`가 `bundle`/`output`인 것만. `blocked`·junk는 제외
+- 스카우트 결과는 `scout` 결정으로 원장에 남는다(`8건: 이름, 이름, ...`)

@@ -119,3 +119,29 @@ def test_graph_compiles_with_interrupt():
 
     graph = build_graph()
     assert graph is not None
+
+
+def test_select_references_scores_and_filters():
+    items = [
+        {"name": "floral-plate", "kind": "illustration", "license_scope": "bundle", "topics": ["floral"]},
+        {"name": "blocked-logo", "kind": "logo", "license_scope": "blocked", "topics": ["floral"]},
+        {"name": "junk-item", "kind": "illustration", "license_scope": "bundle", "junk": True},
+        {"name": "generic-icon", "kind": "icon", "license_scope": "output"},
+    ]
+    refs = craft.select_references({"tones": ["따뜻"], "purpose": "floral 카드"}, items, limit=5)
+    names = [r["name"] for r in refs]
+    assert names[0] == "floral-plate"
+    assert "blocked-logo" not in names
+    assert "junk-item" not in names
+    assert refs[0]["score"] > refs[1]["score"]
+
+
+@needs_assets
+def test_references_from_fixture_catalog():
+    import json
+
+    path = os.path.join(ASSETS, "test_data/golden/catalog.json")
+    items = json.load(open(path))["items"]
+    refs = craft.select_references(craft.parse_brief("미니멀 랜딩"), items, limit=4)
+    assert len(refs) == 4
+    assert all(ref["scope"] in ("bundle", "output") for ref in refs)
