@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+
+jobs:
+  brand-tokens:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: sonagi-assets (브랜드 SSOT)
+        uses: actions/checkout@v4
+        with:
+          repository: mindulle/sonagi-assets
+          path: sonagi-assets
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test deps
+        run: python3 -m pip install --quiet pytest
+
+      - name: SSOT 확인
+        env:
+          SONAGI_ASSETS_DIR: ${{ github.workspace }}/sonagi-assets
+        run: |
+          test -f "$SONAGI_ASSETS_DIR/tokens/semantic.json"
+          test -f "$SONAGI_ASSETS_DIR/registry/styles.json"
+
+      - name: 브랜드 토큰
+        env:
+          SONAGI_ASSETS_DIR: ${{ github.workspace }}/sonagi-assets
+        run: python3 -m pytest test_brand_tokens.py -q -rs
