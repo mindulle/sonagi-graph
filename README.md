@@ -12,3 +12,34 @@ Sonagi 생태계의 다양한 에이전틱 그래프(Agentic Graphs)를 정의�
 pip install langgraph-cli
 langgraph up --wait --debugger-port 3000
 ```
+
+## 브랜드 토큰
+
+그래프는 팔레트를 직접 들고 있지 않는다. 색은 `sonagi-assets`의 SSOT에서 읽는다.
+
+| SSOT | 내용 |
+| --- | --- |
+| `tokens/semantic.json` | 팔레트(editorial·architecture) |
+| `registry/index.json` | `tokens_version`·`ruleset_version`·스타일 수 |
+| `registry/styles.json` | 스타일 `id`·축 조합 |
+
+```bash
+export SONAGI_ASSETS_DIR=/home/ubuntu/sonagi-assets   # 기본값
+```
+
+```python
+import brand
+
+palette = brand.design_palette("architecture")  # 12개 역할, 모두 토큰 또는 파생
+stamp = brand.contract()                        # 산출물에 남길 재현 좌표
+style = brand.style("editorial")                # 이름 또는 style_id로 조회
+```
+
+토큰에 없는 역할은 **파생**한다(`brand.tint`/`brand.shade`). 같은 입력이면 같은
+hex가 나오고, 토큰을 고치면 팔레트도 따라온다. 매핑 표는 `brand.py` docstring에 있다.
+
+SSOT가 없으면 `BrandSourceMissing`으로 멈춘다. 조용히 기본색으로 그리지 않는다.
+
+```bash
+python3 -m pytest test_brand_tokens.py -q
+```

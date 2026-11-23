@@ -10,6 +10,9 @@ import subprocess
 from pathlib import Path
 from typing import Annotated, TypedDict, List, Dict, Any, Optional
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import brand  # noqa: E402
+
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
@@ -62,20 +65,8 @@ def brief_node(state: DesignOpsState) -> Dict[str, Any]:
             "accent": 1.5,
             "dash_pattern": "4 4"
         },
-        "palette": {
-            "bg_obsidian": "#060911",
-            "bg_dome": "#090d16",
-            "border_slate": "#30363d",
-            "border_dark": "#1e2430",
-            "ice_blue": "#4A90E2",
-            "cyan_soft": "#00ffcc",
-            "gold_dandelion": "#ffd166",
-            "gold_core": "#f59e0b",
-            "gold_highlight": "#fff5cc",
-            "white": "#ffffff",
-            "mono_ink": "#111827",
-            "mono_paper": "#fafafa"
-        },
+        "palette": brand.design_palette("architecture"),
+        "contract": brand.contract(),
         "typography": {
             "serif_family": "Cormorant Garamond",
             "mono_family": "JetBrains Mono"
@@ -104,7 +95,10 @@ def brief_node(state: DesignOpsState) -> Dict[str, Any]:
     
     msg = (
         f"📋 [Brief 접수] '{brief_text}'\n"
-        f"- Sonagi V3 디자인 토큰 바인딩 완료 (2px 정밀 선화, OKLCH 기반 옵시디언/골드/시안 팔레트, 8px 그리드)\n"
+        f"- 토큰 바인딩 완료 (2px 정밀 선화, 8px 그리드, "
+        f"tokens {design_tokens['contract']['tokens_version']} · "
+        f"ruleset {design_tokens['contract']['ruleset_version']})\n"
+        f"- 팔레트는 sonagi-assets SSOT에서 읽었습니다(파생색 포함)\n"
         f"- 3대 시안 아키텍처 설정 완료: Draft A (8각 파셋 돔), Draft B (광학 렌즈형), Draft C (모노크롬 스탬프)"
     )
     
