@@ -54,6 +54,7 @@ class CraftState(TypedDict):
     run_id: str
     brief: Any
     ir: Dict[str, Any]
+    references: List[Dict[str, Any]]
     content: str
     recipe: Optional[str]
     variants: List[Dict[str, Any]]
@@ -92,6 +93,14 @@ def brief_node(state: CraftState) -> Dict[str, Any]:
             )
         ],
     }
+
+
+def scout_node(state: CraftState) -> Dict[str, Any]:
+    ir = state.get("ir") or craft.parse_brief(state.get("brief", ""))
+    catalog = Path(os.environ.get("SONAGI_CATALOG", str(CATALOG)))
+    items = json.loads(catalog.read_text()).get("items", [])
+    references = craft.select_references(ir, items, limit=int(os.environ.get("SONAGI_CRAFT_REFS", 8)))
+    return {"references": references, "status": "scouted"}
 
 
 def compose_node(state: CraftState) -> Dict[str, Any]:
@@ -197,21 +206,21 @@ def approve_node(state: CraftState) -> Dict[str, Any]:
     render = next(r for r in state["renders"] if r["id"] == chosen["id"])
     ledger_dir = Path(render["svg"]).parent
     ledger = ledger_dir / "decisions.json"
-    _run(
-        [
-            ASSETS_DIR / "scripts/ledger.py",
-            "--svg",
-            render["svg"],
-            "--manifest",
-            render["manifest"],
-            "--decision",
-            f"style={render['style_id']}: 판정 {chosen['verdict']} · 점수 {chosen['score']}",
-            "--by",
-            os.environ.get("SONAGI_CRAFT_BY", "craft-graph"),
-            "--out",
-            ledger,
-        ]
-    )
+    args = [
+        ASSETS_DIR / "scripts/ledger.py",
+        "--svg",
+        render["svg"],
+        "--manifest",
+        render["manifest"],
+        "--decision",
+        f"style={render['style_id']}: 판정 {chosen['verdict']} · 점수 {chosen['score']}",
+    ]
+    references = state.get("references") or []
+    if references:
+        names = ", ".join(str(ref.get("name")) for ref in references[:6])
+        args += ["--decision", f"scout={len(references)}건: {names}"]
+    args += ["--by", os.environ.get("SONAGI_CRAFT_BY", "craft-graph"), "--out", str(ledger)]
+    _run(args)
     return {
         "selection": chosen["id"],
         "ledger": str(ledger),
@@ -225,6 +234,7 @@ def approve_node(state: CraftState) -> Dict[str, Any]:
 def build_graph():
     graph = StateGraph(CraftState)
     graph.add_node("brief", brief_node)
+    graph.add_node("scout", scout_node)
     graph.add_node("compose", compose_node)
     graph.add_node("render", render_node)
     graph.add_node("critic", critic_node)
@@ -232,7 +242,8 @@ def build_graph():
     graph.add_node("approve", approve_node)
 
     graph.add_edge(START, "brief")
-    graph.add_edge("brief", "compose")
+    graph.add_edge("brief", "scout")
+    graph.add_edge("scout", "compose")
     graph.add_edge("compose", "render")
     graph.add_edge("render", "critic")
     graph.add_edge("critic", "select")

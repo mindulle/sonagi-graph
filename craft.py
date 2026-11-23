@@ -174,3 +174,65 @@ def rank_candidates(results):
 def pick(results, limit=3):
     """선택지로 올릴 후보. FAIL은 제외하고, 없으면 빈 목록."""
     return [row for row in rank_candidates(results) if row["verdict"] != "fail"][:limit]
+
+
+# --- 레퍼런스 스카우트 ----------------------------------------------------
+
+SCOPE_WEIGHT = {"bundle": 2, "output": 1}
+KIND_WEIGHT = {"illustration": 2, "icon": 1, "typography": 1}
+
+
+def _tone_keywords(tones):
+    words = []
+    for tone in tones:
+        for keywords in TONE_RULES.get(tone, {}).values():
+            words.extend(keywords)
+    return words
+
+
+def select_references(brief, items, limit=8):
+    """카탈로그에서 브리프와 맞는 참고 자산을 고른다.
+
+    `bundle`(재배포 가능)과 `output`(결과물에만)만 후보. `blocked`·junk는 뺀다.
+    점수는 topic/style/name 문자열 매칭 + scope/kind 가중치다. LLM을 쓰지 않는다.
+    """
+    keywords = _tone_keywords(brief.get("tones") or [])
+    purpose = str(brief.get("purpose", "")).lower()
+    rows = []
+    for item in items:
+        if item.get("junk"):
+            continue
+        scope = item.get("license_scope") or "output"
+        if scope == "blocked":
+            continue
+        haystack = " ".join(
+            [
+                str(item.get("name", "")),
+                str(item.get("style", "")),
+                " ".join(item.get("topics") or []),
+                " ".join(item.get("tags") or []),
+            ]
+        ).lower()
+        score = 0
+        matched = []
+        for keyword in keywords:
+            if keyword in haystack:
+                score += 3
+                matched.append(keyword)
+        if item.get("name") and str(item["name"]).lower() in purpose:
+            score += 4
+            matched.append(item["name"])
+        score += SCOPE_WEIGHT.get(scope, 0)
+        score += KIND_WEIGHT.get(item.get("kind", ""), 0)
+        rows.append(
+            {
+                "name": item.get("name"),
+                "kind": item.get("kind"),
+                "license": item.get("license"),
+                "scope": scope,
+                "score": score,
+                "matched": sorted(set(matched)),
+            }
+        )
+    rows.sort(key=lambda r: (-r["score"], r["name"] or ""))
+    return rows[:limit]
