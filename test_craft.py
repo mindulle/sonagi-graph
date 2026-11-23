@@ -121,19 +121,150 @@ def test_graph_compiles_with_interrupt():
     assert graph is not None
 
 
-def test_select_references_scores_and_filters():
+def _ref(
+    name,
+    *,
+    category="ui-component",
+    ext="svg",
+    topics=(),
+    tags=(),
+    scope="bundle",
+    kind="asset",
+    **extra,
+):
+    item = {
+        "name": name,
+        "kind": kind,
+        "category": category,
+        "ext": ext,
+        "topics": list(topics),
+        "tags": list(tags),
+        "license_scope": scope,
+        "license": "mit",
+    }
+    item.update(extra)
+    return item
+
+
+def test_extract_topic_terms_pulls_subject_nouns():
+    terms = craft.extract_topic_terms(craft.parse_brief("민들레 홀씨 유리 문진"))
+    assert terms == ["dandelion", "seed", "glass", "paperweight"]
+
+
+def test_korean_particles_do_not_break_terms():
+    terms = craft.extract_topic_terms({"purpose": "등대가 있는 바다를 담은 그림"})
+    assert terms == ["lighthouse", "sea", "ocean"]
+
+
+def test_tone_and_medium_words_are_not_topic_terms():
+    assert craft.extract_topic_terms(craft.parse_brief("미니멀하고 차분한 랜딩")) == []
+    assert (
+        craft.extract_topic_terms(craft.parse_brief("따뜻하고 고급스러운 인쇄물")) == []
+    )
+    assert craft.extract_topic_terms(craft.parse_brief("대담한 포스터")) == []
+
+
+def test_generic_short_terms_are_rejected():
+    for word in ("none", "rule", "arch", "deco"):
+        assert not craft.is_topic_term(word)
+    # 4자 이하 미등록 낱말은 주제어가 아니다. 사전에 올린 short term만 통과.
+    assert not craft.is_topic_term("calm")
+    assert craft.is_topic_term("glass")
+    assert craft.is_topic_term("seed")  # 사전 등재
+
+
+def test_name_match_is_token_exact_not_substring():
+    items = [_ref("lighthouse-keeper", category="typography", ext="ttf")]
+    # 'house'는 'lighthouse'의 부분 문자열이지만 토큰이 아니다.
+    assert craft.select_references({"purpose": "house"}, items) == []
+    refs = craft.select_references({"purpose": "등대"}, items)
+    assert [ref["name"] for ref in refs] == ["lighthouse-keeper"]
+
+
+def test_archivo_and_border_none_never_match():
     items = [
-        {"name": "floral-plate", "kind": "illustration", "license_scope": "bundle", "topics": ["floral"]},
-        {"name": "blocked-logo", "kind": "logo", "license_scope": "blocked", "topics": ["floral"]},
-        {"name": "junk-item", "kind": "illustration", "license_scope": "bundle", "junk": True},
-        {"name": "generic-icon", "kind": "icon", "license_scope": "output"},
+        _ref("Archivo-Black", category="typography", ext="ttf"),
+        _ref("border-none", tags=["kind:icon", "topic:icon"], topics=["icon"]),
+        _ref("cell-signal-none", tags=["kind:icon", "topic:icon"], topics=["icon"]),
+        _ref("BigelowRules-Regular", category="typography", ext="ttf"),
     ]
-    refs = craft.select_references({"tones": ["따뜻"], "purpose": "floral 카드"}, items, limit=5)
-    names = [r["name"] for r in refs]
-    assert names[0] == "floral-plate"
-    assert "blocked-logo" not in names
-    assert "junk-item" not in names
-    assert refs[0]["score"] > refs[1]["score"]
+    for purpose in (
+        "미니멀하고 차분한 랜딩",
+        "따뜻하고 고급스러운 인쇄물",
+        "대담한 포스터",
+    ):
+        assert craft.select_references(craft.parse_brief(purpose), items) == []
+
+
+def _glass_catalog():
+    items = [_ref(f"Glass-Plate-{i}", category="painting", ext="jpg") for i in range(4)]
+    items += [
+        _ref(f"glass-{i}", tags=["kind:icon", "topic:icon"], topics=["icon"])
+        for i in range(4)
+    ]
+    items += [
+        _ref(f"Glass-Regular-{i}", category="typography", ext="ttf") for i in range(3)
+    ]
+    return items
+
+
+def test_role_quota_fills_each_role():
+    refs = craft.select_references({"purpose": "유리 문진"}, _glass_catalog())
+    roles = [ref["role"] for ref in refs]
+    assert roles.count("illustration") == 3
+    assert roles.count("icon") == 3
+    assert roles.count("typography") == 2
+    assert len(refs) == 8  # 최대 8건
+    # 정렬은 (점수 desc, 이름) — 점수는 단조 감소
+    assert [ref["score"] for ref in refs] == sorted(
+        (ref["score"] for ref in refs), reverse=True
+    )
+    assert all({"role", "score", "matched", "reason"} <= set(ref) for ref in refs)
+
+
+def test_quota_shortfall_returns_fewer_with_reason():
+    items = [
+        _ref(f"glass-{i}", tags=["kind:icon", "topic:icon"], topics=["icon"])
+        for i in range(5)
+    ]
+    report = craft.scout_references({"purpose": "유리 문진"}, items)
+    assert (
+        len(report["references"]) == 3
+    )  # 아이콘으로 illustration 슬롯을 메우지 않는다
+    assert {ref["role"] for ref in report["references"]} == {"icon"}
+    shortfall = {row["role"]: row for row in report["shortfall"]}
+    assert set(shortfall) == {"illustration", "typography"}
+    assert shortfall["illustration"]["got"] == 0
+    assert "paperweight" in shortfall["illustration"]["reason"]
+
+
+def test_select_references_filters_and_ranks():
+    items = [
+        _ref("floral-plate", category="painting", ext="jpg", topics=["floral"]),
+        _ref(
+            "floral-plate-output",
+            category="painting",
+            ext="jpg",
+            topics=["floral"],
+            scope="output",
+        ),
+        _ref(
+            "blocked-floral",
+            category="painting",
+            ext="jpg",
+            topics=["floral"],
+            scope="blocked",
+        ),
+        _ref(
+            "junk-floral", category="painting", ext="jpg", topics=["floral"], junk=True
+        ),
+    ]
+    refs = craft.select_references({"purpose": "floral 카드"}, items, limit=5)
+    names = [ref["name"] for ref in refs]
+    assert names == ["floral-plate", "floral-plate-output"]
+    assert refs[0]["score"] > refs[1]["score"]  # bundle > output
+    assert refs[0]["matched"] == ["floral"]
+    assert "topics" in refs[0]["reason"]
 
 
 @needs_assets
@@ -142,6 +273,10 @@ def test_references_from_fixture_catalog():
 
     path = os.path.join(ASSETS, "test_data/golden/catalog.json")
     items = json.load(open(path))["items"]
-    refs = craft.select_references(craft.parse_brief("미니멀 랜딩"), items, limit=4)
-    assert len(refs) == 4
+    report = craft.scout_references(craft.parse_brief("plate 참고"), items)
+    refs = report["references"]
+    # 픽스처에는 plate 일러스트만 있다. 8건을 억지로 채우지 않는다.
+    assert 0 < len(refs) < 8
+    assert all(ref["role"] == "illustration" for ref in refs)
     assert all(ref["scope"] in ("bundle", "output") for ref in refs)
+    assert any(row["role"] == "typography" for row in report["shortfall"])
