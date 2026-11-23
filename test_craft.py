@@ -295,3 +295,24 @@ def test_scout_dedupes_same_name_across_sets():
     names = [r["name"] for r in refs]
     assert names.count("lighthouse") == 1
     assert all(r.get("id") for r in refs)
+
+
+def test_lexicon_covers_illustration_names():
+    terms = craft.extract_topic_terms({"purpose": "커피와 카메라가 있는 페이지"})
+    assert "coffee" in terms and "camera" in terms
+    terms = craft.extract_topic_terms({"purpose": "가방과 시계가 있는 캠핑 페이지"})
+    assert {"bag", "watch", "camping"} <= set(terms)
+    assert "gaming" in craft.extract_topic_terms({"purpose": "게임 화면"})
+
+
+@needs_assets
+def test_coffee_brief_finds_real_illustration():
+    import json
+
+    path = os.environ.get("SONAGI_CATALOG", os.path.join(ASSETS, "test_data/golden/catalog.json"))
+    items = json.load(open(path))["items"]
+    refs = craft.scout_references({"purpose": "커피 일러스트", "tones": []}, items)
+    # 픽스처 카탈로그에는 coffee가 없으므로, 실제 카탈로그가 있을 때만 의미가 있다
+    if not any(i.get("name") == "coffee" for i in items):
+        pytest.skip("coffee 자산이 카탈로그에 없음(픽스처)")
+    assert any(r["name"] == "coffee" for r in refs["references"])
