@@ -36,4 +36,4 @@ jobs:
       - name: 브랜드 토큰
         env:
           SONAGI_ASSETS_DIR: ${{ github.workspace }}/sonagi-assets
-        run: python3 -m pytest test_brand_tokens.py -q -rs
+        run: python3 -m pytest test_brand_tokens.py test_craft.py -q -rs
