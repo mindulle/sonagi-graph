@@ -280,3 +280,18 @@ def test_references_from_fixture_catalog():
     assert all(ref["role"] == "illustration" for ref in refs)
     assert all(ref["scope"] in ("bundle", "output") for ref in refs)
     assert any(row["role"] == "typography" for row in report["shortfall"])
+
+
+def test_scout_dedupes_same_name_across_sets():
+    items = [
+        {"id": "a1", "name": "lighthouse", "kind": "icon", "license_scope": "bundle",
+         "tags": ["kind:icon", "topic:lighthouse"]},
+        {"id": "a2", "name": "lighthouse", "kind": "icon", "license_scope": "bundle",
+         "tags": ["kind:icon", "topic:lighthouse"]},
+        {"id": "b1", "name": "harbor", "kind": "icon", "license_scope": "bundle",
+         "tags": ["kind:icon", "topic:lighthouse"]},
+    ]
+    refs = craft.scout_references({"purpose": "등대", "tones": []}, items)["references"]
+    names = [r["name"] for r in refs]
+    assert names.count("lighthouse") == 1
+    assert all(r.get("id") for r in refs)

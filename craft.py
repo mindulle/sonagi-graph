@@ -510,6 +510,7 @@ def scout_references(brief, items, limit=REF_LIMIT, quota=None):
         reason = " · ".join(f"{term}∈{'+'.join(sources[term])}" for term in matched)
         rows.append(
             {
+                "id": item.get("id"),
                 "name": item.get("name"),
                 "kind": item.get("kind"),
                 "role": role,
@@ -521,8 +522,15 @@ def scout_references(brief, items, limit=REF_LIMIT, quota=None):
             }
         )
 
+    # 같은 이름의 자산이 여러 세트에 있을 수 있다. 슬롯을 중복으로 쓰지 않는다.
+    rows.sort(key=lambda r: (-r["score"], r["name"] or ""))
     by_role = {role: [] for role in REF_ROLES}
+    seen = set()
     for row in rows:
+        key = (row["role"], row["name"])
+        if key in seen:
+            continue
+        seen.add(key)
         by_role[row["role"]].append(row)
 
     picked = []
