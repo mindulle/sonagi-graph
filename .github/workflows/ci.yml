@@ -24,7 +24,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install test deps
-        run: python3 -m pip install --quiet pytest
+        run: python3 -m pip install --quiet pytest langgraph langchain-core
 
       - name: SSOT 확인
         env:
@@ -36,4 +36,4 @@ jobs:
       - name: 브랜드 토큰
         env:
           SONAGI_ASSETS_DIR: ${{ github.workspace }}/sonagi-assets
-        run: python3 -m pytest test_brand_tokens.py -q -rs
+        run: python3 -m pytest test_brand_tokens.py test_craft.py -q -rs
