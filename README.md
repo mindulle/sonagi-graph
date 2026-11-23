@@ -43,3 +43,15 @@ SSOT가 없으면 `BrandSourceMissing`으로 멈춘다. 조용히 기본색으�
 ```bash
 python3 -m pytest test_brand_tokens.py -q
 ```
+
+서체와 선 두께도 같은 SSOT에서 온다.
+
+```python
+brand.typography()                 # {'display': {'stack': ..., 'family': ...}, ...}
+brand.google_fonts_url({"display": "700", "mono": "600"})
+brand.stroke("border-width")       # "2px"  (True 2px Stem)
+brand.stroke_px("border-hairline") # 1.0
+```
+
+그래프 소스에 `Cormorant Garamond` 같은 서체 이름이나 `stroke-width="2"`를 직접
+쓰지 않는다. 단, 아트워크 내부의 장식선 두께는 작품 값이므로 리터럴로 남긴다.
