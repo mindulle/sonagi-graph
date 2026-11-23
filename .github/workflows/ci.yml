@@ -24,7 +24,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install test deps
-        run: python3 -m pip install --quiet pytest
+        run: python3 -m pip install --quiet pytest langgraph langchain-core
 
       - name: SSOT 확인
         env:
