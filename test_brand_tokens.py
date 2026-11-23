@@ -83,3 +83,38 @@ def test_design_ops_graph_has_no_hex_literals():
     root = os.path.dirname(os.path.abspath(__file__))
     source = open(os.path.join(root, "graphs/design_ops_graph.py")).read()
     assert not re.search(r'"#[0-9a-fA-F]{6}"', source)
+
+
+@needs_assets
+def test_typography_comes_from_tokens():
+    typo = brand.typography()
+    assert typo["display"]["family"] == "Cormorant Garamond"
+    assert "serif" in typo["display"]["stack"]
+    assert typo["mono"]["family"] == "JetBrains Mono"
+    url = brand.google_fonts_url({"display": "700"})
+    assert url.startswith("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@700")
+
+
+@needs_assets
+def test_typography_change_flows(monkeypatch, tmp_path):
+    import shutil
+
+    (tmp_path / "tokens").mkdir()
+    source = brand.assets_dir() / "tokens/tokens.css"
+    text = source.read_text().replace("'Cormorant Garamond'", "'Test Serif'")
+    (tmp_path / "tokens/tokens.css").write_text(text)
+    monkeypatch.setenv("SONAGI_ASSETS_DIR", str(tmp_path))
+    assert brand.typography()["display"]["family"] == "Test Serif"
+
+
+@needs_assets
+def test_stroke_comes_from_tokens():
+    assert brand.stroke("border-width") == "2px"
+    assert brand.stroke_px("border-hairline") == 1.0
+
+
+def test_design_ops_graph_has_no_font_literals():
+    root = os.path.dirname(os.path.abspath(__file__))
+    source = open(os.path.join(root, "graphs/design_ops_graph.py")).read()
+    assert "Cormorant" not in source
+    assert "JetBrains" not in source

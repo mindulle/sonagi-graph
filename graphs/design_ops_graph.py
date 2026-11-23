@@ -60,17 +60,14 @@ def brief_node(state: DesignOpsState) -> Dict[str, Any]:
         "grid": 8,
         "viewBox": "0 0 400 400",
         "strokes": {
-            "primary": 2.0,
-            "secondary": 1.0,
+            "primary": brand.stroke_px("border-width"),
+            "secondary": brand.stroke_px("border-hairline"),
             "accent": 1.5,
             "dash_pattern": "4 4"
         },
         "palette": brand.design_palette("architecture"),
         "contract": brand.contract(),
-        "typography": {
-            "serif_family": "Cormorant Garamond",
-            "mono_family": "JetBrains Mono"
-        },
+        "typography": brand.typography(),
         "archetypes": [
             {
                 "id": "draft_a_faceted",
@@ -114,12 +111,16 @@ def brief_node(state: DesignOpsState) -> Dict[str, Any]:
 # -------------------------------------------------------------
 def _generate_svg_faceted_paperweight(tokens: Dict[str, Any]) -> str:
     p = tokens["palette"]
+    typo = tokens["typography"]
+    sw = tokens["strokes"]["primary"]
+    hair = tokens["strokes"]["secondary"]
+    gf = brand.google_fonts_url({"display": "700", "mono": "600"}).replace("&", "&amp;")
     return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" fill="none">
   <defs>
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@700&amp;family=JetBrains+Mono:wght@600&amp;display=swap');
-      .seal-serif {{ font-family: 'Cormorant Garamond', Georgia, serif; font-weight: 700; font-size: 21px; letter-spacing: 0.28em; fill: {p["white"]}; }}
-      .seal-mono {{ font-family: 'JetBrains Mono', Consolas, monospace; font-weight: 600; font-size: 10px; letter-spacing: 0.22em; fill: {p["gold_dandelion"]}; }}
+      @import url('{gf}&amp;display=swap');
+      .seal-serif {{ font-family: {typo["display"]["stack"]}; font-weight: 700; font-size: 21px; letter-spacing: 0.28em; fill: {p["white"]}; }}
+      .seal-mono {{ font-family: {typo["mono"]["stack"]}; font-weight: 600; font-size: 10px; letter-spacing: 0.22em; fill: {p["gold_dandelion"]}; }}
     </style>
     <path id="upperArc" d="M 54,200 A 146,146 0 1,1 346,200" fill="none" />
     <path id="lowerArc" d="M 64,210 A 142,142 0 0,0 336,210" fill="none" />
@@ -142,10 +143,10 @@ def _generate_svg_faceted_paperweight(tokens: Dict[str, Any]) -> str:
   </defs>
   <circle cx="200" cy="200" r="192" fill="{p["bg_obsidian"]}" />
   <circle cx="200" cy="200" r="192" fill="url(#glassAura)" />
-  <circle cx="200" cy="200" r="188" stroke="{p["border_slate"]}" stroke-width="2" />
+  <circle cx="200" cy="200" r="188" stroke="{p["border_slate"]}" stroke-width="{sw:g}" />
   <circle cx="200" cy="200" r="176" stroke="{p["ice_blue"]}" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.8" />
-  <circle cx="200" cy="200" r="126" stroke="{p["border_slate"]}" stroke-width="2" />
-  <circle cx="200" cy="200" r="120" stroke="{p["border_dark"]}" stroke-width="1" />
+  <circle cx="200" cy="200" r="126" stroke="{p["border_slate"]}" stroke-width="{sw:g}" />
+  <circle cx="200" cy="200" r="120" stroke="{p["border_dark"]}" stroke-width="{hair:g}" />
   <text class="seal-serif">
     <textPath href="#upperArc" startOffset="50%" text-anchor="middle">MINDULLE STUDIO</textPath>
   </text>
@@ -219,12 +220,16 @@ def _generate_svg_faceted_paperweight(tokens: Dict[str, Any]) -> str:
 
 def _generate_svg_minimalist_lens(tokens: Dict[str, Any]) -> str:
     p = tokens["palette"]
+    typo = tokens["typography"]
+    sw = tokens["strokes"]["primary"]
+    hair = tokens["strokes"]["secondary"]
+    gf = brand.google_fonts_url({"display": "600;700", "mono": "500"}).replace("&", "&amp;")
     return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" fill="none">
   <defs>
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&amp;family=JetBrains+Mono:wght@500&amp;display=swap');
-      .lens-serif {{ font-family: 'Cormorant Garamond', Georgia, serif; font-weight: 700; font-size: 20px; letter-spacing: 0.32em; fill: {p["white"]}; }}
-      .lens-mono {{ font-family: 'JetBrains Mono', Consolas, monospace; font-weight: 500; font-size: 9.5px; letter-spacing: 0.24em; fill: {p["gold_dandelion"]}; }}
+      @import url('{gf}&amp;display=swap');
+      .lens-serif {{ font-family: {typo["display"]["stack"]}; font-weight: 700; font-size: 20px; letter-spacing: 0.32em; fill: {p["white"]}; }}
+      .lens-mono {{ font-family: {typo["mono"]["stack"]}; font-weight: 500; font-size: 9.5px; letter-spacing: 0.24em; fill: {p["gold_dandelion"]}; }}
     </style>
     <path id="lensUpper" d="M 60,200 A 140,140 0 1,1 340,200" fill="none" />
     <path id="lensLower" d="M 70,210 A 136,136 0 0,0 330,210" fill="none" />
@@ -284,22 +289,26 @@ def _generate_svg_minimalist_lens(tokens: Dict[str, Any]) -> str:
 
 def _generate_svg_monogram_stamp(tokens: Dict[str, Any]) -> str:
     p = tokens["palette"]
+    typo = tokens["typography"]
+    sw = tokens["strokes"]["primary"]
+    hair = tokens["strokes"]["secondary"]
     ink = p["mono_paper"]
     bg = p["mono_ink"]
+    gf = brand.google_fonts_url({"display": "700", "mono": "700"}).replace("&", "&amp;")
     return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" fill="none">
   <defs>
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@700&amp;family=JetBrains+Mono:wght@700&amp;display=swap');
-      .stamp-serif {{ font-family: 'Cormorant Garamond', Georgia, serif; font-weight: 700; font-size: 22px; letter-spacing: 0.30em; fill: {ink}; }}
-      .stamp-mono {{ font-family: 'JetBrains Mono', Consolas, monospace; font-weight: 700; font-size: 11px; letter-spacing: 0.26em; fill: {ink}; }}
+      @import url('{gf}&amp;display=swap');
+      .stamp-serif {{ font-family: {typo["display"]["stack"]}; font-weight: 700; font-size: 22px; letter-spacing: 0.30em; fill: {ink}; }}
+      .stamp-mono {{ font-family: {typo["mono"]["stack"]}; font-weight: 700; font-size: 11px; letter-spacing: 0.26em; fill: {ink}; }}
     </style>
     <path id="stampUpper" d="M 52,200 A 148,148 0 1,1 348,200" fill="none" />
     <path id="stampLower" d="M 64,212 A 142,142 0 0,0 336,212" fill="none" />
   </defs>
   <circle cx="200" cy="200" r="192" fill="{bg}" />
   <circle cx="200" cy="200" r="188" stroke="{ink}" stroke-width="2.5" />
-  <circle cx="200" cy="200" r="180" stroke="{ink}" stroke-width="1" />
-  <circle cx="200" cy="200" r="126" stroke="{ink}" stroke-width="2" />
+  <circle cx="200" cy="200" r="180" stroke="{ink}" stroke-width="{hair:g}" />
+  <circle cx="200" cy="200" r="126" stroke="{ink}" stroke-width="{sw:g}" />
   <text class="stamp-serif">
     <textPath href="#stampUpper" startOffset="50%" text-anchor="middle">MINDULLE STUDIO</textPath>
   </text>

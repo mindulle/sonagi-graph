@@ -3,8 +3,9 @@
 그래프가 팔레트를 직접 들고 있으면 토큰을 개정해도 그래프만 옛 색으로 남는다.
 (2026-11-23 기준 `design_ops_graph.py`에 hex 12개가 박혀 있었다.)
 
-SSOT는 `sonagi-assets/tokens/semantic.json`(팔레트)과 `sonagi-assets/registry/`
-(스타일 id·룰 버전)다. 경로는 `SONAGI_ASSETS_DIR`로 바꿀 수 있다.
+SSOT는 `sonagi-assets/tokens/semantic.json`(팔레트), `tokens/tokens.css`(서체·선),
+`sonagi-assets/registry/`(스타일 id·룰 버전)다. 경로는 `SONAGI_ASSETS_DIR`로
+바꿀 수 있다.
 
 ```bash
 export SONAGI_ASSETS_DIR=/home/ubuntu/sonagi-assets   # 기본값
@@ -33,6 +34,8 @@ export SONAGI_ASSETS_DIR=/home/ubuntu/sonagi-assets   # 기본값
     import brand
 
     palette = brand.design_palette("architecture")
+    typo = brand.typography()     # display/sans/mono — tokens.css의 --mds-font-*
+    strand = brand.stroke("border-width")   # "2px" (True 2px Stem)
     stamp = brand.contract()      # tokens_version·style_count — 산출물에 남긴다
 """
 
@@ -41,6 +44,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 
@@ -115,6 +119,61 @@ def contract() -> dict:
         "ruleset_version": data["index"].get("ruleset_version"),
         "source": str(assets_dir()),
     }
+
+
+# --- 서체·선 -------------------------------------------------------------
+
+_CSS_VAR = re.compile(r"--mds-([a-z-]+):\s*([^;]+);")
+
+
+def css_vars() -> dict:
+    """`tokens/tokens.css`의 `--mds-*` 변수를 이름 그대로 읽는다."""
+    path = assets_dir() / "tokens/tokens.css"
+    if not path.is_file():
+        raise BrandSourceMissing(f"토큰 CSS가 없습니다: {path}")
+    return dict(_CSS_VAR.findall(path.read_text()))
+
+
+def _first_family(stack: str) -> str:
+    first = stack.split(",")[0].strip()
+    return first.strip("'\"")
+
+
+def typography() -> dict:
+    """토큰의 서체 세 역할. `stack`은 CSS 값, `family`는 인용부호 없는 이름."""
+    variables = css_vars()
+    out = {}
+    for role in ("display", "sans", "mono"):
+        stack = variables.get(f"font-{role}")
+        if not stack:
+            raise BrandSourceMissing(f"토큰에 --mds-font-{role}이 없습니다")
+        out[role] = {"stack": stack.strip(), "family": _first_family(stack)}
+    return out
+
+
+def google_fonts_url(weights: dict[str, str]) -> str:
+    """`{"display": "700", "mono": "600"}` → Google Fonts CSS URL."""
+    families = typography()
+    parts = []
+    for role, weight in weights.items():
+        if role not in families:
+            raise KeyError(f"토큰에 없는 서체 역할: {role}")
+        parts.append(
+            f"family={families[role]['family'].replace(' ', '+')}:wght@{weight}"
+        )
+    return "https://fonts.googleapis.com/css2?" + "&".join(parts)
+
+
+def stroke(role: str = "border-width") -> str:
+    """토큰의 선 두께(px 문자열). 기본은 구조선 2px."""
+    value = css_vars().get(role)
+    if not value:
+        raise BrandSourceMissing(f"토큰에 --mds-{role}이 없습니다")
+    return value.strip()
+
+
+def stroke_px(role: str = "border-width") -> float:
+    return float(stroke(role).removesuffix("px"))
 
 
 # --- 색 파생 -------------------------------------------------------------
