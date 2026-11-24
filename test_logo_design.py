@@ -219,3 +219,54 @@ def test_refine_fallback_on_llm_failure(monkeypatch):
     assert "원래" in result["brief"]
     assert result["iteration_count"] == 2
     assert result["status"] == "refined"
+
+
+# ---------------------------------------------------------------------------
+# research 노드
+# ---------------------------------------------------------------------------
+
+
+def test_research_skipped_when_mark_source_none():
+    result = mod.research_node({"brief": "x", "mark_source": "none"})
+    assert result["status"] == "research_skipped"
+
+
+def test_research_skipped_when_flag_set():
+    result = mod.research_node({"brief": "x", "mark_source": "generate", "skip_research": True})
+    assert result["status"] == "research_skipped"
+
+
+def test_research_collects_and_analyzes(monkeypatch):
+    """research_node가 source_verification과 knowledge_harvester를 호출하고 LLM으로 분석한다."""
+    from langchain_core.runnables import RunnableLambda
+
+    # 하위 그래프 호출을 mock
+    class FakeSV:
+        def invoke(self, *a, **k):
+            return {"verified_sources": [{"source_data": {"title": "Logo Design Reference"}}], "status": "completed"}
+
+    class FakeKH:
+        def invoke(self, *a, **k):
+            return {"met_museum_results": [{"title": "Bauhaus Poster"}], "status": "completed"}
+
+    import graphs.logo_design_graph as ldm
+    monkeypatch.setattr(ldm, "uuid", __import__("uuid"))
+
+    # build_* 함수를 mock
+    import sys
+    fake_sv_mod = type(sys)("fake_sv")
+    fake_sv_mod.build_source_verification_graph = lambda checkpointer=None: FakeSV()
+    fake_kh_mod = type(sys)("fake_kh")
+    fake_kh_mod.build_knowledge_harvester_graph = lambda checkpointer=None: FakeKH()
+    monkeypatch.setitem(sys.modules, "graphs.source_verification_graph", fake_sv_mod)
+    monkeypatch.setitem(sys.modules, "graphs.knowledge_harvester_graph", fake_kh_mod)
+
+    # LLM mock
+    class FakeResp:
+        content = "추천 concept은 monogram입니다. type_block과 seal_frame 계열이 적합합니다."
+    monkeypatch.setattr(ldm, "chat_model", lambda *a, **k: RunnableLambda(lambda _: FakeResp()))
+
+    result = ldm.research_node({"brief": "미니멀 로고", "mark_source": "generate"})
+    assert result["status"] == "researched"
+    assert "monogram" in (result.get("recommended_concept") or "")
+    assert "type_block" in result["research_summary"]
