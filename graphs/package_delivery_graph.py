@@ -40,6 +40,9 @@ OUT_ROOT = Path(os.environ.get("SONAGI_PACKAGE_OUT", "/tmp/package_delivery"))
 
 class PackageDeliveryState(TypedDict, total=False):
     brief: str
+    concept: Optional[
+        str
+    ]  # press concept: seed_dispersal, press_imprint, monogram, negative_space, mascot
     mark_source: str  # "generate" | "existing" | "none"
     mark_path: Optional[str]  # 기존 마크 경로 (mark_source="existing")
     mark_svg: Optional[str]  # 잠긴 마크 SVG
@@ -114,7 +117,7 @@ def press_mark_node(state: PackageDeliveryState) -> Dict[str, Any]:
     brief_doc = {
         "brand_name": brief_text,
         "palette": palette,
-        "concept": "press_imprint",
+        "concept": state.get("concept", "press_imprint"),
         "media_scope": ["web", "print", "favicon"],
     }
     brief_path = out_dir / "brief.yaml"
@@ -122,18 +125,19 @@ def press_mark_node(state: PackageDeliveryState) -> Dict[str, Any]:
         yaml.safe_dump(brief_doc, allow_unicode=True, sort_keys=False), encoding="utf-8"
     )
 
-    _run_subprocess(
-        [
-            str(PRESS_GRAPH),
-            "run",
-            str(brief_path),
-            "--out",
-            str(out_dir),
-            "--candidates",
-            "12",
-        ],
-        cwd=PRESS_DIR,
-    )
+    cmd = [
+        str(PRESS_GRAPH),
+        "run",
+        str(brief_path),
+        "--out",
+        str(out_dir),
+        "--candidates",
+        "12",
+    ]
+    concept = state.get("concept")
+    if concept:
+        cmd += ["--concept", concept]
+    _run_subprocess(cmd, cwd=PRESS_DIR)
 
     run_doc = json.loads((out_dir / "run.json").read_text(encoding="utf-8"))
     selected = run_doc.get("selected", [])
