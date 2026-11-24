@@ -141,6 +141,35 @@ MCP 쪽      ─ readback(전) → execute → readback(후) → verify_figma_re
 재읽기 대조 `matched 29/29 · drift 0 · extra 0`. `python3 -m pytest test_figma_apply.py`
 는 Figma 없이 모드 누락·동명 충돌·값 드리프트·잔여 변수 판정을 고정한다.
 
+### 별칭 감사 (`figma_drift.py`, 읽기 전용)
+
+실서비스 파일의 시맨틱 변수는 **별칭**(`state/error → state/danger → crimson/50`)이다.
+값을 hex로만 비교하면 전부 `"alias"`로 읽혀 거짓 드리프트가 난다(2026-11-24 감사에서
+29건). `figma_drift.py`는 별칭을 모드 이름 따라 끝까지 해석해 계획과 대조한다.
+
+```bash
+FIGMA_TOKEN=... python3 figma_drift.py --file-key AEoW19jmlUh3rFgzhhV1vH
+python3 figma_drift.py --snapshot test_data/figma/snapshot_mindulle_2026-11-24.json
+python3 figma_drift.py --file-key ... --json | jq .drift
+```
+
+| 종료 코드 | 의미 |
+| --- | --- |
+| 0 | 29/29 일치 |
+| 1 | 드리프트·별칭 이상(순환·대상 없음)·모드 누락 |
+| 2 | **확인 불가** — 토큰 없음/만료(401·403)/네트워크 |
+
+**fail-closed**: 2를 0으로 바꾸지 않는다. 확인 못 한 것을 "이상 없음"으로 보고하면
+감사가 없는 것보다 나쁘다.
+
+- 스냅샷 `sonagi.figma.snapshot/1`은 컬렉션·모드를 id로 싣고 별칭을 id로 보존한다
+  (`figma_snapshot_script()`). 그래서 `verify_figma_readback()`도 별칭 파일에서 거짓
+  드리프트를 내지 않는다.
+- 컬렉션명이 계획(`Semantic Colors`)과 파일(`Colors`)에서 다르면 **기대 변수 이름이
+  80% 이상 겹치는 컬렉션**으로 붙이고 `collectionFallback: "name-overlap"`으로 밝힌다.
+- 픽스처 `test_data/figma/snapshot_mindulle_2026-11-24.json`은 실서비스 파일에서 읽은
+  Colors 29 + Color Primitives 43이다(값·별칭 사슬 실측, id는 합성).
+
 ## Asset Craft (자연어 → 렌더 후보 → 사람 선택)
 
 `graphs/asset_craft_graph.py`는 브리프 한 줄로 렌더 후보 3개를 만들고, 결정론
