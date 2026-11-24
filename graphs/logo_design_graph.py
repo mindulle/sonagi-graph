@@ -88,6 +88,7 @@ class PackageDeliveryState(TypedDict, total=False):
     brief: str
     research_summary: Optional[str]
     skip_research: bool
+    skip_vision: bool
     recommended_concept: Optional[str]
     concept: Optional[str]  # press concept (직접 지정 시)
     concepts: List[Dict[str, Any]]  # LLM 생성 방향 목록
@@ -633,6 +634,48 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
                     penalties += 10
     except Exception:
         pass
+
+    # --- 6. LLM Vision 판단 (16px 가독성) ---
+    # 픽셀 분석으로 잡지 못하는 시각적 문제를 LLM이 판단한다.
+    # skip_vision=True이면 건너뛴다 (비용 절감).
+    if not state.get("skip_vision") and (tmp / "mark_16.png").exists():
+        try:
+            import base64
+            img_path = tmp / "mark_16.png"
+            img_b64 = base64.b64encode(img_path.read_bytes()).decode("ascii")
+            llm = chat_model("LOGO_VISION_LLM_MODEL", default_model="gemini-3-flash", temperature=0.1)
+            vision_prompt = [
+                {"role": "user", "content": [
+                    {"type": "text", "text":
+                     "이 이미지는 16x16 픽셀로 렌더링된 로고 마크입니다. "
+                     "다음 질문에 답하세요:\n"
+                     "1. 이 마크가 16px에서 읽히는가? (yes/no)\n"
+                     "2. 형태가 뭉개지거나 구분이 안 되는 부분이 있는가? (있으면 설명)\n"
+                     "3. 단색으로 바꿔도 읽히는가? (yes/no)\n"
+                     "4. 개선 제안 (1문장)\n"
+                     "형식: READABLE: yes/no | BLUR: 설명 또는 none | MONO: yes/no | SUGGEST: 제안"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                ]},
+            ]
+            resp = llm.invoke(vision_prompt)
+            text = resp.content if hasattr(resp, "content") else str(resp)
+            report["checks"]["vision_judgment"] = text[:300]
+
+            # 파싱: READABLE: no → 감점
+            low = text.lower()
+            if "readable: no" in low or "readable:no" in low:
+                report["issues"].append("LLM vision: 16px에서 읽히지 않음")
+                penalties += 20
+            if "blur:" in low and "none" not in low.split("blur:")[-1][:20]:
+                blur_desc = text.split("blur:")[-1].split("|")[0].strip() if "blur:" in text else ""
+                if blur_desc and blur_desc.lower() != "none":
+                    report["issues"].append(f"LLM vision: {blur_desc[:80]}")
+                    penalties += 10
+            if "mono: no" in low or "mono:no" in low:
+                report["issues"].append("LLM vision: 단색에서 읽히지 않음")
+                penalties += 10
+        except Exception as e:
+            report["checks"]["vision_error"] = str(e)[:100]
 
     report["score"] = max(0, 100 - penalties)
     return {"context_test_report": report, "context_test_score": report["score"], "status": "context_tested"}
