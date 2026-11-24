@@ -51,6 +51,26 @@ Kimaki 흐름:
 2. HITL 그래프는 `next=[...]`와 `thread_id`를 남긴다. Kimaki가 선택지를 보여주고,
    사용자가 고르면 `graph_cli.py approve`로 재개한다.
 
+### 서버 배포 (호스트 자원 마운트)
+
+`langgraph up`으로 띄운 컨테이너는 기본적으로 호스트 자원이 없다. `docker-compose.deploy.yml`이
+아래를 바인드 마운트하고, 그래프별 환경 변수를 주입한다.
+
+| 마운트 | 쓰는 그래프 |
+| --- | --- |
+| `/home/ubuntu/llm-wiki` | `editorial_verification`, `visual_consistency`, `knowledge_harvester`, `source_verification` |
+| `/home/ubuntu/sonagi-assets` | `design_ops`, `asset_craft`, `brand.py` |
+| `mindulle-design-system/packages/tokens` | `design_token_sync` |
+| `/usr/local/bin/{filmcraft,effectcraft,vectorcraft}-cli` | `video_ops`, `design_ops`, `asset_craft` |
+| `/var/www/craft-suite` | `video_ops` CDN 배포 |
+
+```bash
+langgraph up -p 8123 --recreate -d docker-compose.deploy.yml
+```
+
+호스트 서비스(CLIProxyAPI `:38107`, SearXNG `:8080`)는 Docker 브릿지 IP(`172.19.0.1`)로 접근한다.
+컨테이너는 root로 돌기 때문에 마운트된 볼트·CDN에 root 소유 파일이 생긴다(필요하면 `chown`).
+
 ### 그래프를 추가할 때
 
 1. `graphs/<name>_graph.py`에 `graph = builder.compile(...)`를 둔다. 이름은 반드시 `graph`.
