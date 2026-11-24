@@ -56,6 +56,56 @@ brand.stroke_px("border-hairline") # 1.0
 그래프 소스에 `Cormorant Garamond` 같은 서체 이름이나 `stroke-width="2"`를 직접
 쓰지 않는다. 단, 아트워크 내부의 장식선 두께는 작품 값이므로 리터럴로 남긴다.
 
+## Design Token Sync (토큰 정본 → 소비처 컴파일 → 사람 승인)
+
+정본은 `@mindulle/tokens`(`mindulle-design-system/packages/tokens`, 2026-11-23
+확정)이다. `sonagi-assets/tokens`는 그 투영이다. `token_sync.py`가 정본을 읽어
+검사하고 소비처 산출물을 만들며, `graphs/design_token_sync_graph.py`가 그 위에
+승인 게이트를 얹는다.
+
+```
+tokens/*.json ─ token_parse ─ transpile ─ ⏸ hitl_checkpoint ─ figma_bridge ─ ⏸ figma_apply
+                    │            │              │                  │              │
+            참조 해석·검사 4종   CSS·Tailwind   승인 → 리포트     브리지 확인     쓰기 게이트
+                                 Craft 스와치                     (드라이런)
+```
+
+```bash
+export MDS_TOKENS_DIR=/home/ubuntu/mindulle-design-system/packages/tokens
+export SONAGI_ASSETS_DIR=/home/ubuntu/sonagi-assets
+
+python3 token_sync.py                       # 검사 + 산출물 → reports/design_tokens/
+python3 -m pytest test_token_sync.py -q     # 해석·검사·결정론·그래프
+```
+
+| 산출물 | 소비처 |
+| --- | --- |
+| `mds-tokens.css` | 웹 — `--mds-*` 변수, Light/Dark 블록 |
+| `tailwind.tokens.cjs` | Tailwind — 색·간격·타이포 |
+| `craft-swatches.json` | VectorCraft·DesignCraft·PhotoCraft·EffectCraft·FilmCraft 공용 팔레트 |
+| `craft-swatches.svg` | 사람 검수용 스와치 시트 |
+| `figma-variables.js` | Figma 콘솔 — `DRY_RUN = true` 기본, Variables 배치 |
+| `token-report.json` | 해시·검사·경고·승인 기록 |
+
+**정본은 고치지 않는다.** 검사에서 나온 결함은 리포트 경고로만 남기고 MDS에서
+고친다. 2026-11-24 실행 기준 경고 18건, 치명 0건:
+
+- `dangling_alias` 11건 — `semantics.json`의 합성 타이포가 `{font.sans}`를 쓴다.
+  `{typography.fontFamily.sans}`여야 한다. 해석 실패한 잎은 산출물에서 뺀다
+  (없는 변수를 가리키는 CSS를 만들지 않는다).
+- `non_dtcg_value` 4건 — `state.error`가 `var(--mds-…)` 리터럴이다.
+- `projection_drift` 1건 — `editorial.accent-ink`가 `#fbfbfa`인데 정본은 `#ffffff`.
+- `radius_layer_missing` — radius 3단계 계약에 semantic 레이어가 없다(primitive 8단계만).
+- `space_half_step` — `spacing.1/3/5`(4·12·20px)가 8px 배수가 아닌 하프스텝.
+
+검사 규칙과 심각도는 `token_sync.py` docstring의 표에 있다. 같은 입력이면 같은
+바이트가 나오고(생성 시각·UUID 없음), `artifactSetHash`가 그 지문이다.
+
+Figma 쓰기는 **검증되지 않았다**. 이 호스트는 `9223~9225`에서 `/json/version`이
+404라 CDP 브리지가 확인되지 않는다. 그래서 `figma_bridge`는 배치 계획과 콘솔
+스크립트까지만 만들고, `figma_apply`는 브리지가 확인되지 않는 한 아무것도 쓰지
+않는다(`status=figma_apply_skipped`). 검증 절차는 PR 본문에 있다.
+
 ## Asset Craft (자연어 → 렌더 후보 → 사람 선택)
 
 `graphs/asset_craft_graph.py`는 브리프 한 줄로 렌더 후보 3개를 만들고, 결정론
