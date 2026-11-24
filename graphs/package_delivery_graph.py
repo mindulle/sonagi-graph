@@ -23,6 +23,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
@@ -58,12 +59,37 @@ class PackageDeliveryState(TypedDict, total=False):
     published: List[str]
 
 
+_SHIM_DIR = None
+
+
+def _inkscape_shim_dir():
+    """press가 부르는 `inkscape`를 vectorcraft-cli로 넘기는 shim 디렉터리."""
+    global _SHIM_DIR
+    if _SHIM_DIR:
+        return _SHIM_DIR
+    repo_root = Path(__file__).resolve().parent.parent
+    shim_py = repo_root / "scripts" / "inkscape_shim.py"
+    if not shim_py.exists():
+        return None
+    d = Path(tempfile.mkdtemp(prefix="press-shim-"))
+    wrapper = d / "inkscape"
+    wrapper.write_text(f'#!/bin/sh\nexec python3 "{shim_py}" "$@"\n', encoding="utf-8")
+    wrapper.chmod(0o755)
+    _SHIM_DIR = str(d)
+    return _SHIM_DIR
+
+
 def _run_subprocess(args, cwd=None):
+    env = os.environ.copy()
+    shim = _inkscape_shim_dir()
+    if shim:
+        env["PATH"] = shim + os.pathsep + env.get("PATH", "")
     done = subprocess.run(
         ["python3", *map(str, args)],
         capture_output=True,
         text=True,
         cwd=str(cwd or PRESS_DIR),
+        env=env,
     )
     if done.returncode != 0:
         raise RuntimeError(
