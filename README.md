@@ -73,6 +73,23 @@ langgraph up -p 8123 --recreate -d docker-compose.deploy.yml
 호스트 서비스(CLIProxyAPI `:38107`, SearXNG `:8080`)는 Docker 브릿지 IP(`172.19.0.1`)로 접근한다.
 컨테이너는 root로 돌기 때문에 마운트된 볼트·CDN에 root 소유 파일이 생긴다(필요하면 `chown`).
 
+### Kimaki에서 그래프 쓰기
+
+Discord 세션에서 그래프를 실행하려면 `scripts/graph_cli.py`를 쓴다. 그래프 코드를
+import하지 않으므로 Kimaki가 어느 디렉터리에서 실행되든 동작한다.
+
+```bash
+# 단순 실행
+python3 scripts/graph_cli.py run error_triage --input '{"messages":[{"role":"user","content":"에러"}]}' --wait
+
+# HITL (그래프가 멈추면 thread_id가 출력된다)
+python3 scripts/graph_cli.py run logo_design --input '{"brief":"브랜드","mark_source":"generate"}' --wait
+python3 scripts/graph_cli.py approve <thread_id> --graph logo_design --values '{"approval_status":"approved"}' --wait
+```
+
+상세 패턴은 `routines/graph-run.md`에 있다. Kimaki가 이 파일을 읽고 사용자 요청에
+맞는 그래프를 선택·실행·승인한다.
+
 ### 그래프를 추가할 때
 
 1. `graphs/<name>_graph.py`에 `graph = builder.compile(...)`를 둔다. 이름은 반드시 `graph`.
