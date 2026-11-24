@@ -18,5 +18,9 @@
     "source_verification": "./graphs/source_verification_graph.py:graph",
     "package_delivery": "./graphs/package_delivery_graph.py:graph"
   },
-  "python_version": "3.11"
+  "python_version": "3.11",
+  "dockerfile_lines": [
+    "# Sonagi Press: press_gen/press_audit이 SVG를 PNG로 래스터화할 때 inkscape를 쓴다",
+    "RUN apt-get update && apt-get install -y --no-install-recommends inkscape && rm -rf /var/lib/apt/lists/*"
+  ]
 }
