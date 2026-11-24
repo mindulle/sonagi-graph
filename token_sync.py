@@ -118,6 +118,8 @@ SEVERITY_ORDER = {"error": 0, "warning": 1}
 REPORT_SCHEMA = "sonagi.token_sync.report/1"
 SWATCH_SCHEMA = "sonagi.craft.swatches/1"
 FIGMA_SCHEMA = "sonagi.figma.variables_plan/1"
+FIGMA_WRITE_SCHEMA = "sonagi.figma.write_request/1"
+FIGMA_READBACK_SCHEMA = "sonagi.figma.readback_check/1"
 
 
 class TokenSourceMissing(RuntimeError):
@@ -493,7 +495,8 @@ def _suggest(target: str, leaves: Dict[str, Leaf]) -> Optional[str]:
             return candidate
     tail = target.split(".")[-1]
     matches = sorted(
-        (path for path in leaves if path.endswith("." + tail)), key=lambda p: (p.count("."), p)
+        (path for path in leaves if path.endswith("." + tail)),
+        key=lambda p: (p.count("."), p),
     )
     return matches[0] if matches else None
 
@@ -633,7 +636,9 @@ def check_scales(
 ) -> Tuple[List[Finding], Dict[str, Any]]:
     """타이포 6단계 · space 8px 배수 · radius 3단계."""
     # 별칭은 raw 문자열이 px가 아니다. raw로 검사하면 계약이 조용히 무력화된다.
-    values = {path: (resolved or {}).get(path, leaf.value) for path, leaf in leaves.items()}
+    values = {
+        path: (resolved or {}).get(path, leaf.value) for path, leaf in leaves.items()
+    }
     findings: List[Finding] = []
     detail: Dict[str, Any] = {}
 
@@ -885,7 +890,11 @@ def check_projection(
             continue
         mode = PROJECTION_MODE[theme]
         for role, mapping in sorted(roles.items()):
-            token = mapping if mapping.startswith("primitive.") else f"semantic.{mode}.color.{mapping}"
+            token = (
+                mapping
+                if mapping.startswith("primitive.")
+                else f"semantic.{mode}.color.{mapping}"
+            )
             expected = analysis.resolved.get(token)
             if not isinstance(expected, str):
                 findings.append(
@@ -1122,7 +1131,11 @@ def transpile_css(analysis: Analysis) -> str:
         value = analysis.resolved[path]
         if isinstance(value, dict):  # 합성값(fontSize + lineHeight)은 하위 키로 편다
             for sub_key in sorted(value):
-                emit(structure_lines, css_var_name(f"{path}.{_kebab(sub_key)}"), value[sub_key])
+                emit(
+                    structure_lines,
+                    css_var_name(f"{path}.{_kebab(sub_key)}"),
+                    value[sub_key],
+                )
             continue
         name = css_var_name(path)
         ref = alias_ref(leaf)
@@ -1492,18 +1505,24 @@ def figma_plan(analysis: Analysis) -> Dict[str, Any]:
         "incomplete": incomplete,
         "write": {
             "dryRun": True,
-            "delivery": "figma-console-paste",
+            "delivery": "mcp-figma-execute",
             "script": ARTIFACT_FIGMA_JS,
+            "apply": "figma_apply_package()의 executeScript를 figma_execute로 옮긴다",
+            "verify": "readbackScript로 다시 읽어 verify_figma_readback()으로 대조한다",
+            "bridgeProbe": "GET /health 200 + connectedClients>0",
             "note": (
-                "CDP 브리지(/json/version)가 확인되지 않아 API 직접 쓰기를 구현하지 않았다. "
-                "생성된 스크립트를 Figma 콘솔에 붙여넣되 DRY_RUN을 false로 바꿔야 쓴다."
+                "계획은 계산만 한다. 쓰기는 Desktop Bridge 플러그인이 붙어 "
+                "connectedClients>0일 때만 figma_execute로 옮기고, 쓰기 전 스냅샷과 "
+                "쓰기 후 재읽기 대조까지 통과해야 '반영됨'으로 본다."
             ),
         },
     }
 
 
 def bridge_ports() -> List[int]:
-    raw = os.environ.get("FIGMA_CDP_PORTS", "9223,9224,9225")
+    raw = os.environ.get(
+        "FIGMA_BRIDGE_PORTS", os.environ.get("FIGMA_CDP_PORTS", "9223,9224,9225,9226")
+    )
     ports: List[int] = []
     for chunk in raw.split(","):
         chunk = chunk.strip()
@@ -1515,38 +1534,302 @@ def bridge_ports() -> List[int]:
 def probe_bridge(
     ports: Optional[Iterable[int]] = None, timeout: float = 0.4
 ) -> Dict[str, Any]:
-    """Figma CDP 브리지 확인. `/json/version`이 200 + JSON이어야 '확인됨'이다."""
+    """figma-console Desktop Bridge 확인. **포트가 열린 것과 붙은 것은 다르다.**
+
+    이 호스트는 CDP(`/json/version`)를 쓰지 않는다. figma-console은 local 모드에서
+    WebSocket 서버를 띄우고 `/health`로 상태를 알린다:
+
+        {"status":"ok","version":"1.40.9","clients":0,"connectedClients":0}
+
+    `connectedClients`가 0이면 Figma 앱의 Desktop Bridge 플러그인이 붙지 않은
+    상태다. 이때 `figma_execute`는 "No files connected"로 끝나고 아무것도 쓰이지
+    않는다. 그래서 **검증됨 = /health 200 + connectedClients > 0**이다.
+    포트가 열렸다는 사실만으로 쓰기를 허용하지 않는다.
+    """
     ports = list(ports if ports is not None else bridge_ports())
     probes: List[Dict[str, Any]] = []
     verified = False
+    clients_seen = 0
     for port in ports:
-        url = f"http://127.0.0.1:{port}/json/version"
-        entry: Dict[str, Any] = {"port": port, "url": url}
+        url = f"http://127.0.0.1:{port}/health"
+        entry: Dict[str, Any] = {"port": port, "url": url, "ok": False}
         try:
             with urllib.request.urlopen(url, timeout=timeout) as response:
                 body = response.read(2048).decode("utf-8", "replace")
                 entry["status"] = response.status
-                entry["body"] = body[:200]
-                if response.status == 200 and body.strip().startswith("{"):
+                payload = json.loads(body) if body.strip().startswith("{") else {}
+                clients = int(payload.get("connectedClients") or 0)
+                entry["connectedClients"] = clients
+                entry["server"] = payload.get("version")
+                clients_seen = max(clients_seen, clients)
+                if response.status == 200 and clients > 0:
                     verified = True
                     entry["ok"] = True
+                elif response.status == 200:
+                    entry["reason"] = "플러그인 미연결(connectedClients=0)"
         except urllib.error.HTTPError as exc:
             entry["status"] = exc.code
-            entry["ok"] = False
         except Exception as exc:  # 연결 거부·타임아웃
             entry["status"] = None
             entry["error"] = type(exc).__name__
-            entry["ok"] = False
         probes.append(entry)
     return {
         "verified": verified,
         "probes": probes,
+        "connectedClients": clients_seen,
         "checkedAt": None,  # 결정론: 시각을 남기지 않는다
         "evidence": (
-            "GET /json/version 200 + JSON"
+            "GET /health 200 + connectedClients>0"
             if verified
-            else "GET /json/version 실패(브리지 미확인)"
+            else "GET /health connectedClients=0(플러그인 미연결)"
+            if clients_seen == 0 and any(p.get("status") == 200 for p in probes)
+            else "GET /health 실패(브리지 미확인)"
         ),
+    }
+
+
+def rgb_to_hex(color: Dict[str, Any]) -> str:
+    """0~1 실수 → `#rrggbb`(알파가 1이 아니면 `#rrggbbaa`). 계획의 역방향."""
+    channels = []
+    for key in ("r", "g", "b"):
+        value = float(color.get(key, 0.0))
+        channels.append(max(0, min(255, int(round(value * 255)))))
+    body = "#" + "".join(f"{value:02x}" for value in channels)
+    alpha = float(color.get("a", 1.0))
+    if alpha < 1.0:
+        body += f"{max(0, min(255, int(round(alpha * 255)))):02x}"
+    return body
+
+
+def figma_write_request(plan: Dict[str, Any]) -> Dict[str, Any]:
+    """계획 → 쓰기 요청. 모드 키를 Figma 라벨(Light/Dark)로 고정한다.
+
+    네트워크를 타지 않는 순수 함수다. 테스트도 이 함수와 `verify_figma_readback`만
+    있으면 되고, 실제 쓰기는 MCP 클라이언트가 `figma_execute`로 옮긴다.
+    """
+    modes = [plan["modeLabels"][key] for key in plan["modes"]]
+    variables = []
+    incomplete = []
+    for item in plan["variables"]:
+        entry_modes = {}
+        for key in plan["modes"]:
+            value = item["modes"].get(key)
+            if value is None:
+                continue
+            entry_modes[plan["modeLabels"][key]] = rgb_to_hex(value)
+        if len(entry_modes) != len(modes):
+            incomplete.append(item["name"])
+        variables.append(
+            {"name": item["name"], "type": item["type"], "modes": entry_modes}
+        )
+    return {
+        "schema": FIGMA_WRITE_SCHEMA,
+        "collection": plan["collection"],
+        "modes": modes,
+        "applyMode": "merge",
+        "variables": variables,
+        "counts": {"variables": len(variables), "incomplete": len(incomplete)},
+        "incomplete": incomplete,
+    }
+
+
+def figma_execute_script(request: Dict[str, Any]) -> str:
+    """쓰기 요청 → `figma_execute`에 넘길 JS. 멱등이며 동명 변수 충돌을 보고한다.
+
+    다른 컬렉션에 같은 이름의 변수가 있으면 만들지 않고 `conflicts`에 남긴다.
+    같은 이름을 두 컬렉션에 만들면 소비처가 어느 쪽을 바인딩했는지 알 수 없다.
+    """
+    payload = {
+        "collection": request["collection"],
+        "modes": request["modes"],
+        "variables": request["variables"],
+    }
+    body = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False)
+    return (
+        "/* sonagi-graph token_sync.py → Figma Variables 적용 (MCP figma_execute)\n"
+        f" * collection={request['collection']} · variables={len(request['variables'])}"
+        f" · modes={', '.join(request['modes'])}\n"
+        " * 멱등: 기존 변수는 값만 갱신한다. 다른 컬렉션의 동명 변수는 건드리지 않는다.\n"
+        " * 쓰기 전에 figma_snapshot_script()의 스냅샷을 먼저 남긴다.\n"
+        " */\n"
+        f"const REQUEST = {body};\n"
+        "const DRY_RUN = false;\n"
+        "const parse = (value) => ({\n"
+        "  r: parseInt(value.slice(1, 3), 16) / 255,\n"
+        "  g: parseInt(value.slice(3, 5), 16) / 255,\n"
+        "  b: parseInt(value.slice(5, 7), 16) / 255,\n"
+        "  a: value.length === 9 ? parseInt(value.slice(7, 9), 16) / 255 : 1,\n"
+        "});\n"
+        "const cols = await figma.variables.getLocalVariableCollectionsAsync();\n"
+        "let col = cols.find((c) => c.name === REQUEST.collection) || null;\n"
+        "const foreignCollections = cols.filter((c) => !col || c.id !== col.id).map((c) => c.id);\n"
+        "let createdCollection = false;\n"
+        "if (!col) {\n"
+        "  if (DRY_RUN) return { dryRun: true, exists: false, collection: REQUEST.collection };\n"
+        "  col = figma.variables.createVariableCollection(REQUEST.collection);\n"
+        "  createdCollection = true;\n"
+        "}\n"
+        "const modeId = {};\n"
+        "for (const label of REQUEST.modes) {\n"
+        "  const found = col.modes.find((m) => m.name === label);\n"
+        "  if (found) { modeId[label] = found.modeId; continue; }\n"
+        "  if (DRY_RUN) continue;\n"
+        '  // 새 컬렉션의 기본 모드("Mode 1")는 이름만 바꿔 쓴다. addMode로 두면 빈 모드가 남는다.\n'
+        "  const spare = col.modes.find((m) => !Object.values(modeId).includes(m.modeId) && !REQUEST.modes.includes(m.name));\n"
+        "  if (spare) { col.renameMode(spare.modeId, label); modeId[label] = spare.modeId; }\n"
+        "  else { modeId[label] = col.addMode(label); }\n"
+        "}\n"
+        "const local = await figma.variables.getLocalVariablesAsync();\n"
+        "const mine = local.filter((v) => v.variableCollectionId === col.id);\n"
+        "const conflicts = [];\n"
+        "let created = 0;\n"
+        "let updated = 0;\n"
+        "for (const item of REQUEST.variables) {\n"
+        "  let target = mine.find((v) => v.name === item.name) || null;\n"
+        "  if (!target) {\n"
+        "    const elsewhere = local.find((v) => v.name === item.name && foreignCollections.includes(v.variableCollectionId));\n"
+        "    if (elsewhere) { conflicts.push({ name: item.name, collectionId: elsewhere.variableCollectionId }); continue; }\n"
+        "    if (DRY_RUN) { created += 1; continue; }\n"
+        "    target = figma.variables.createVariable(item.name, col, item.type);\n"
+        "    created += 1;\n"
+        "  } else { updated += 1; }\n"
+        "  if (DRY_RUN) continue;\n"
+        "  for (const [label, hex] of Object.entries(item.modes)) {\n"
+        "    target.setValueForMode(modeId[label], parse(hex));\n"
+        "  }\n"
+        "}\n"
+        "return { dryRun: DRY_RUN, collection: col.name, collectionId: col.id, createdCollection,\n"
+        "  modes: col.modes.map((m) => m.name), created, updated, conflicts, expected: REQUEST.variables.length };\n"
+    )
+
+
+def figma_snapshot_script(collection: Optional[str] = None) -> str:
+    """현재 Variables 상태를 읽는 JS. 쓰기 전·후에 같은 스크립트로 스냅샷을 남긴다."""
+    name = collection or figma_collection_name()
+    return (
+        "/* sonagi-graph token_sync.py → Figma Variables 스냅샷 (읽기 전용) */\n"
+        f"const COLLECTION = {json.dumps(name, ensure_ascii=False)};\n"
+        "const hex = (value) => {\n"
+        "  if (!value || typeof value !== 'object' || !('r' in value)) return null;\n"
+        "  const part = (x) => Math.round(x * 255).toString(16).padStart(2, '0');\n"
+        "  const base = '#' + part(value.r) + part(value.g) + part(value.b);\n"
+        "  const a = value.a === undefined ? 1 : value.a;\n"
+        "  return a < 1 ? base + part(a) : base;\n"
+        "};\n"
+        "const cols = await figma.variables.getLocalVariableCollectionsAsync();\n"
+        "const col = cols.find((c) => c.name === COLLECTION) || null;\n"
+        "if (!col) return { collection: COLLECTION, exists: false, modes: [], variables: [] };\n"
+        "const local = await figma.variables.getLocalVariablesAsync();\n"
+        "const names = Object.fromEntries(col.modes.map((m) => [m.modeId, m.name]));\n"
+        "const variables = local\n"
+        "  .filter((v) => v.variableCollectionId === col.id)\n"
+        "  .map((v) => ({\n"
+        "    name: v.name,\n"
+        "    type: v.resolvedType,\n"
+        "    modes: Object.fromEntries(\n"
+        "      Object.entries(v.valuesByMode).map(([id, value]) => [names[id] || id, hex(value) || { alias: true }])\n"
+        "    ),\n"
+        "  }))\n"
+        "  .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));\n"
+        "return { collection: col.name, exists: true, modes: col.modes.map((m) => m.name), variables };\n"
+    )
+
+
+def _normalize_hex(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    body = value.strip().lower()
+    if not body.startswith("#"):
+        return body
+    raw = body[1:]
+    if len(raw) == 3:
+        raw = "".join(ch * 2 for ch in raw)
+    if len(raw) == 8 and raw.endswith("ff"):
+        raw = raw[:6]
+    return "#" + raw
+
+
+def verify_figma_readback(
+    request: Dict[str, Any], snapshot: Dict[str, Any]
+) -> Dict[str, Any]:
+    """읽어온 스냅샷을 요청과 대조한다. 이게 GRAPH-7의 '썼다' 판정이다.
+
+    쓰기 호출이 성공했다는 응답은 증거가 아니다. Variables를 다시 읽어 이름·모드·
+    값을 맞춰 봐야 하고, 모드 누락과 동명 변수 충돌도 여기서 드러난다.
+    """
+    expected_modes = list(request["modes"])
+    expected_names = [item["name"] for item in request["variables"]]
+    if not snapshot.get("exists", True):
+        return {
+            "schema": FIGMA_READBACK_SCHEMA,
+            "ok": False,
+            "reason": "collection_missing",
+            "collection": request["collection"],
+            "expected": len(expected_names),
+            "matched": 0,
+            "missing": expected_names,
+            "extra": [],
+            "modeMissing": expected_modes,
+            "drift": [],
+        }
+
+    actual_modes = list(snapshot.get("modes") or [])
+    mode_missing = [mode for mode in expected_modes if mode not in actual_modes]
+    actual = {item["name"]: item for item in snapshot.get("variables") or []}
+
+    missing: List[str] = []
+    drift: List[Dict[str, Any]] = []
+    matched = 0
+    for item in request["variables"]:
+        hit = actual.get(item["name"])
+        if hit is None:
+            missing.append(item["name"])
+            continue
+        clean = True
+        for mode in expected_modes:
+            want = _normalize_hex(item["modes"].get(mode))
+            got = _normalize_hex((hit.get("modes") or {}).get(mode))
+            if want == got and mode in (hit.get("modes") or {}):
+                continue
+            clean = False
+            drift.append(
+                {"name": item["name"], "mode": mode, "expected": want, "actual": got}
+            )
+        if clean:
+            matched += 1
+
+    extra = sorted(name for name in actual if name not in set(expected_names))
+    return {
+        "schema": FIGMA_READBACK_SCHEMA,
+        "ok": not (missing or extra or mode_missing or drift)
+        and snapshot.get("collection") == request["collection"],
+        "collection": snapshot.get("collection") or request["collection"],
+        "expected": len(expected_names),
+        "matched": matched,
+        "missing": missing,
+        "extra": extra,
+        "modeMissing": mode_missing,
+        "drift": drift,
+    }
+
+
+def figma_apply_package(plan: Dict[str, Any]) -> Dict[str, Any]:
+    """GRAPH-7 쓰기 묶음: 요청 + 적용 스크립트 + 스냅샷 스크립트.
+
+    LangGraph 프로세스에는 MCP 클라이언트가 없으므로 그래프는 이 묶음까지만 만들고,
+    `figma_execute`를 가진 쪽(에이전트·CLI)이 스냅샷 → 적용 → 스냅샷 순으로 옮긴다.
+    """
+    request = figma_write_request(plan)
+    return {
+        "schema": FIGMA_WRITE_SCHEMA,
+        "request": request,
+        "executeScript": figma_execute_script(request),
+        "readbackScript": figma_snapshot_script(request["collection"]),
+        "sequence": [
+            "readbackScript(쓰기 전)",
+            "executeScript",
+            "readbackScript(쓰기 후)",
+        ],
     }
 
 

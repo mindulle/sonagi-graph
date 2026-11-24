@@ -9,18 +9,20 @@ tokens/*.json
      │
  ⏸ hitl_checkpoint   ← interrupt_before. 스와치 SVG를 눈으로 보고 승인한다
      │                승인하면 리포트 JSON(해시·경고·산출물 경로)을 남긴다
- figma_bridge   CDP 브리지(/json/version) 확인 + 콘솔 스크립트 생성. 쓰지는 않는다
+ figma_bridge   Desktop Bridge(/health) 확인 + 적용 묶음 생성. 쓰지는 않는다
      │
- ⏸ figma_apply      ← interrupt_before. 브리지가 확인된 경우에만 Variables를 쓴다
+ ⏸ figma_apply      ← interrupt_before. 브리지가 확인된 경우에만 쓰기 묶음을 내보낸다
 ```
 
 이 그래프는 **LLM을 쓰지 않는다**. 토큰 컴파일은 결정론적 계산이고, 판단은
 사람이 승인 게이트에서 한다. 그래서 노드가 전부 순수 함수 + 파일 쓰기다.
 
-브리지 확인은 `FIGMA_CDP_PORTS`(기본 `9223,9224,9225`)로 한다. 지금 이 호스트는
-`/json/version`이 404라 **미확인**이고, 그래서 `figma_apply`는 계획만 남기고
-아무것도 쓰지 않는다. 확인된 환경에서는 `FIGMA_BRIDGE_VERIFIED=1`로 강제할 수
-있지만, 실제 쓰기 경로는 아직 검증되지 않았다(PR 본문 참고).
+브리지 확인은 `FIGMA_BRIDGE_PORTS`(기본 `9223~9226`)의 `/health`로 한다. CDP
+(`/json/version`)가 아니다 — figma-console은 local 모드에서 WebSocket 서버를 띄우고
+`connectedClients`로 플러그인 연결을 알린다. 포트가 열려 있어도 `connectedClients`가
+0이면 쓰기는 아무 일도 일어나지 않으므로 **검증됨 = /health 200 + connectedClients>0**
+이다. 우회 env는 두지 않는다. 실제 쓰기는 MCP(`figma_execute`)를 가진 쪽이
+`figma.apply.request`를 옮기고, `figma.readback`으로 다시 읽어 대조한다.
 
 사용::
 
@@ -50,8 +52,7 @@ import token_sync as ts  # noqa: E402
 from langgraph.checkpoint.memory import MemorySaver  # noqa: E402
 from langgraph.graph import END, START, StateGraph  # noqa: E402
 
-#: 미확인 브리지에서도 계획만 확인하고 싶을 때. 쓰기 강제가 아니다.
-FORCE_VERIFIED_ENV = "FIGMA_BRIDGE_VERIFIED"
+#: 우회 env는 두지 않는다. 브리지 검증은 /health의 connectedClients만 믿는다.
 
 
 class DesignTokenSyncState(TypedDict, total=False):
@@ -218,16 +219,25 @@ def figma_bridge_node(state: DesignTokenSyncState) -> Dict[str, Any]:
     plan = ts.figma_plan(analysis)
 
     probe = ts.probe_bridge(state.get("bridge_ports"))
-    forced = os.environ.get(FORCE_VERIFIED_ENV, "").lower() in {"1", "true", "yes"}
-    verified = probe["verified"] or forced
+    verified = probe["verified"]
 
     script_text = ts.transpile_figma_script(analysis, plan)
     target = Path(directory or ts.out_dir()) / ts.ARTIFACT_FIGMA_JS
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(script_text, encoding="utf-8")
 
+    package = ts.figma_apply_package(plan)
+    request_path = target.parent / "figma-apply-request.json"
+    request_path.write_text(
+        json.dumps(package["request"], indent=2, sort_keys=True, ensure_ascii=False)
+        + "\n",
+        encoding="utf-8",
+    )
+
     fresh_hash = ts.artifact_set_hash(
-        ts.artifact_manifest({**ts.transpile(analysis), ts.ARTIFACT_FIGMA_JS: script_text})
+        ts.artifact_manifest(
+            {**ts.transpile(analysis), ts.ARTIFACT_FIGMA_JS: script_text}
+        )
     )
     figma = {
         "plan": plan,
@@ -235,10 +245,14 @@ def figma_bridge_node(state: DesignTokenSyncState) -> Dict[str, Any]:
         or fresh_hash == state.get("artifact_set_hash"),
         "bridge": {
             "verified": verified,
-            "forced": forced,
+            "connectedClients": probe.get("connectedClients", 0),
             "evidence": probe["evidence"],
             "probes": probe["probes"],
         },
+        "request": package["request"],
+        "requestPath": str(request_path),
+        "executeScript": package["executeScript"],
+        "readbackScript": package["readbackScript"],
         "script": str(target),
         "scriptSha256": ts.sha256_text(script_text),
     }
@@ -246,40 +260,73 @@ def figma_bridge_node(state: DesignTokenSyncState) -> Dict[str, Any]:
         "figma": figma,
         "status": "figma_planned" if verified else "figma_bridge_unverified",
         "note": (
-            "브리지 확인됨 — 승인하면 쓸 수 있다."
+            "브리지 확인됨 — 승인하면 쓰기 묶음을 내보낸다."
             if verified
-            else "브리지 미확인(/json/version 실패) — 콘솔 스크립트만 남긴다."
+            else "브리지 미확인(/health connectedClients=0 또는 무응답) — 계획만 남긴다."
         ),
     }
 
 
 def figma_apply_node(state: DesignTokenSyncState) -> Dict[str, Any]:
-    """실제 쓰기 게이트. 브리지가 확인되지 않으면 아무것도 하지 않는다."""
-    bridge = state.get("figma", {}).get("bridge", {})
+    """쓰기 게이트. 브리지가 확인되지 않으면 아무것도 내보내지 않는다.
+
+    LangGraph 프로세스에는 MCP 클라이언트가 없으므로 여기서 Variables를 직접 쓰지
+    않는다. 승인·브리지·요청이 모두 맞으면 `figma.apply`에 실행 순서와 스크립트를
+    담아 내보내고, MCP 쪽이 실행한 뒤 `figma_readback`으로 대조한다.
+    """
+    figma = state.get("figma", {})
+    bridge = figma.get("bridge", {})
     verified = bool(bridge.get("verified"))
     approved = bool(state.get("approved"))
     requested = bool(state.get("apply_figma"))
+    ready = verified and approved and requested
+
+    reason = (
+        "브리지 미확인 — 쓰기 없음."
+        if not verified
+        else "승인되지 않음"
+        if not approved
+        else "호출자가 쓰기를 요청하지 않음"
+        if not requested
+        else "쓰기 묶음 내보냄 — MCP 실행 후 재읽기 대조 필요"
+    )
+    apply_block = {
+        "attempted": ready,
+        "verified": verified,
+        "approved": approved,
+        "requested": requested,
+        "reason": reason,
+        "sequence": (["readback(pre)", "execute", "readback(post)"] if ready else []),
+        "collection": (figma.get("request") or {}).get("collection"),
+        "variables": (figma.get("request") or {}).get("counts", {}).get("variables"),
+        "request": figma.get("request") if ready else None,
+        "executeScript": figma.get("executeScript") if ready else None,
+        "readbackScript": figma.get("readbackScript") if ready else None,
+    }
+
+    # 리포트에는 큰 스크립트 본문 대신 해시·경로만 남긴다(리포트가 수 MB가 되지 않게).
+    report_apply = {
+        key: value
+        for key, value in apply_block.items()
+        if key not in {"request", "executeScript", "readbackScript"}
+    }
+    report_apply["requestPath"] = figma.get("requestPath")
+    report_apply["executeSha256"] = ts.sha256_text(figma.get("executeScript") or "")
 
     # 리포트에 시도 결과를 남긴다(쓰지 않았더라도 근거를 남긴다)
     report_path = state.get("report_path")
     if report_path and Path(report_path).is_file():
         report = json.loads(Path(report_path).read_text(encoding="utf-8"))
-        report["figma"] = {key: value for key, value in state.get("figma", {}).items()}
-        report["figma"]["apply"] = {
-            "attempted": requested and verified and approved,
-            "verified": verified,
-            "approved": approved,
-            "requested": requested,
-            "reason": (
-                "브리지 미확인 — Variables 쓰기 경로를 실행하지 않았다."
-                if not verified
-                else (
-                    "승인되지 않음"
-                    if not approved
-                    else ("호출자가 쓰기를 요청하지 않음" if not requested else "실행")
-                )
-            ),
-        }
+        current = report.get("figma") or {}
+        current.update(
+            {
+                key: value
+                for key, value in figma.items()
+                if key not in {"executeScript", "readbackScript", "request"}
+            }
+        )
+        current["apply"] = report_apply
+        report["figma"] = current
         Path(report_path).write_text(
             json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
             encoding="utf-8",
@@ -288,19 +335,22 @@ def figma_apply_node(state: DesignTokenSyncState) -> Dict[str, Any]:
     if not verified:
         return {
             "status": "figma_apply_skipped",
-            "note": "브리지 미확인 — 쓰기 없음. 콘솔 스크립트를 Figma에서 직접 실행해야 한다.",
+            "note": "브리지 미확인 — 쓰기 없음. 계획·요청만 남긴다.",
+            "figma": {**figma, "apply": apply_block},
         }
     if not (approved and requested):
         return {
             "status": "figma_apply_skipped",
-            "note": "쓰기 없음. 스크립트를 Figma 콘솔에서 DRY_RUN=false로 실행해야 반영된다.",
+            "note": "쓰기 없음. 승인과 apply_figma 요청이 모두 있어야 실행 묶음이 나간다.",
+            "figma": {**figma, "apply": apply_block},
         }
     return {
-        "status": "figma_apply_blocked",
+        "status": "figma_apply_ready",
         "note": (
-            "브리지가 확인됐지만 CDP 쓰기 어댑터는 아직 검증되지 않아 실행하지 않는다. "
-            "콘솔 스크립트를 쓴다."
+            "쓰기 묶음을 내보냈다. MCP figma_execute로 executeScript를 옮긴 뒤 "
+            "readback 결과를 verify_figma_readback()으로 대조해야 '반영됨'이다."
         ),
+        "figma": {**figma, "apply": apply_block},
     }
 
 

@@ -69,7 +69,7 @@ brand.stroke_px("border-hairline") # 1.0
 tokens/*.json ─ token_parse ─ transpile ─ ⏸ hitl_checkpoint ─ figma_bridge ─ ⏸ figma_apply
                     │            │              │                  │              │
             참조 해석·검사 4종   CSS·Tailwind   승인 → 리포트     브리지 확인     쓰기 게이트
-                                 Craft 스와치                     (드라이런)
+                                 Craft 스와치                     요청+스크립트    (MCP)
 ```
 
 ```bash
@@ -78,6 +78,7 @@ export SONAGI_ASSETS_DIR=/home/ubuntu/sonagi-assets
 
 python3 token_sync.py                       # 검사 + 산출물 → reports/design_tokens/
 python3 -m pytest test_token_sync.py -q     # 해석·검사·결정론·그래프
+python3 -m pytest test_figma_apply.py -q    # Figma 쓰기 요청·재읽기 대조
 ```
 
 | 산출물                | 소비처                                                               |
@@ -86,7 +87,8 @@ python3 -m pytest test_token_sync.py -q     # 해석·검사·결정론·그래�
 | `tailwind.tokens.cjs` | Tailwind — 색·간격·타이포                                            |
 | `craft-swatches.json` | VectorCraft·DesignCraft·PhotoCraft·EffectCraft·FilmCraft 공용 팔레트 |
 | `craft-swatches.svg`  | 사람 검수용 스와치 시트                                              |
-| `figma-variables.js`  | Figma 콘솔 — `DRY_RUN = true` 기본, Variables 배치                   |
+| `figma-variables.js`  | Figma 콘솔용 배치 스크립트(`DRY_RUN = true` 기본)                     |
+| `figma-apply-request.json` | MCP 쓰기 요청 — 컬렉션·모드 라벨·변수 hex                         |
 | `token-report.json`   | 해시·검사·경고·승인 기록                                             |
 
 **정본은 고치지 않는다.** 검사에서 나온 결함은 리포트 경고로만 남기고 MDS에서
@@ -119,10 +121,22 @@ after   {"leaves": 301, "resolved": 301, "unresolved": 0,  "errors": 0, "warning
 검사 규칙과 심각도는 `token_sync.py` docstring의 표에 있다. 같은 입력이면 같은
 바이트가 나오고(생성 시각·UUID 없음), `artifactSetHash`가 그 지문이다.
 
-Figma 쓰기는 **검증되지 않았다**. 이 호스트는 `9223~9225`에서 `/json/version`이
-404라 CDP 브리지가 확인되지 않는다. 그래서 `figma_bridge`는 배치 계획과 콘솔
-스크립트까지만 만들고, `figma_apply`는 브리지가 확인되지 않는 한 아무것도 쓰지
-않는다(`status=figma_apply_skipped`). 검증 절차는 PR 본문에 있다.
+Figma 쓰기는 **MCP Desktop Bridge**로 한다(CDP 아님). figma-console은 local 모드에서
+WebSocket 서버(`9223~9226`)를 띄우고 `/health`로 `connectedClients`를 알린다.
+포트가 열려 있어도 플러그인이 안 붙으면 0이고, 그 상태의 `figma_execute`는
+"No files connected"로 끝난다. 그래서 판정은 **`/health` 200 + `connectedClients>0`**
+하나뿐이고, 우회 env는 두지 않는다.
+
+```
+figma_bridge ─ figma-apply-request.json  (계획 → hex·모드 라벨 요청)
+             └ executeScript / readbackScript
+figma_apply  ─ 브리지+승인+apply_figma 모두 참일 때만 쓰기 묶음 내보냄
+MCP 쪽      ─ readback(전) → execute → readback(후) → verify_figma_readback()
+```
+
+실측(2026-11-24, `Pipeline Test` 파일): `created=29 · updated=29(재적용) · conflicts 0`,
+재읽기 대조 `matched 29/29 · drift 0 · extra 0`. `python3 -m pytest test_figma_apply.py`
+는 Figma 없이 모드 누락·동명 충돌·값 드리프트·잔여 변수 판정을 고정한다.
 
 ## Asset Craft (자연어 → 렌더 후보 → 사람 선택)
 
