@@ -644,36 +644,59 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
             img_path = tmp / "mark_16.png"
             img_b64 = base64.b64encode(img_path.read_bytes()).decode("ascii")
             llm = chat_model("LOGO_VISION_LLM_MODEL", default_model="gemini-3-flash", temperature=0.1)
+            # 16px과 32px 렌더를 함께 보내 비교 판단
+            img_16_b64 = base64.b64encode((tmp / "mark_16.png").read_bytes()).decode("ascii")
+            img_32_b64 = base64.b64encode((tmp / "mark_32.png").read_bytes()).decode("ascii") if (tmp / "mark_32.png").exists() else img_16_b64
+
             vision_prompt = [
                 {"role": "user", "content": [
                     {"type": "text", "text":
-                     "이 이미지는 16x16 픽셀로 렌더링된 로고 마크입니다. "
-                     "다음 질문에 답하세요:\n"
-                     "1. 이 마크가 16px에서 읽히는가? (yes/no)\n"
-                     "2. 형태가 뭉개지거나 구분이 안 되는 부분이 있는가? (있으면 설명)\n"
-                     "3. 단색으로 바꿔도 읽히는가? (yes/no)\n"
-                     "4. 개선 제안 (1문장)\n"
-                     "형식: READABLE: yes/no | BLUR: 설명 또는 none | MONO: yes/no | SUGGEST: 제안"},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                     "이것은 같은 로고 마크를 16x16px(왼쪽)과 32x32px(오른쪽)으로 렌더링한 것입니다. "
+                     "인간 디자이너의 눈으로 평가하세요.\n\n"
+                     "평가 기준:\n"
+                     "1. READABLE: 16px에서 마크의 전체 형태가 구분되는가? (yes/no)\n"
+                     "   - yes: 형태가 명확히 보임\n"
+                     "   - no: 형태가 뭉개지거나 점으로 보임\n"
+                     "2. DETAIL_LOSS: 16px에서 사라지는 디테일이 있는가? (있으면 설명, 없으면 none)\n"
+                     "3. MONOCHROME: 단색(검정)으로 바꿔도 형태가 유지되는가? (yes/no)\n"
+                     "4. BALANCE: 마크가 캔버스에서 시각적으로 균형 잡혀 있는가? (yes/no)\n"
+                     "5. SUGGEST: 개선 제안 (1문장, 구체적으로)\n\n"
+                     "형식:\n"
+                     "READABLE: yes/no\n"
+                     "DETAIL_LOSS: 설명 또는 none\n"
+                     "MONOCHROME: yes/no\n"
+                     "BALANCE: yes/no\n"
+                     "SUGGEST: 제안"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_16_b64}"}},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_32_b64}"}},
                 ]},
             ]
             resp = llm.invoke(vision_prompt)
             text = resp.content if hasattr(resp, "content") else str(resp)
             report["checks"]["vision_judgment"] = text[:300]
 
-            # 파싱: READABLE: no → 감점
+            # 파싱: 구조화된 응답에서 각 항목 추출
             low = text.lower()
             if "readable: no" in low or "readable:no" in low:
                 report["issues"].append("LLM vision: 16px에서 읽히지 않음")
                 penalties += 20
-            if "blur:" in low and "none" not in low.split("blur:")[-1][:20]:
-                blur_desc = text.split("blur:")[-1].split("|")[0].strip() if "blur:" in text else ""
-                if blur_desc and blur_desc.lower() != "none":
-                    report["issues"].append(f"LLM vision: {blur_desc[:80]}")
+            # DETAIL_LOSS
+            if "detail_loss:" in low:
+                detail = text.lower().split("detail_loss:")[-1].split("monochrome:")[0].strip() if "monochrome:" in low else text.lower().split("detail_loss:")[-1].strip()
+                if detail and detail != "none" and "none" not in detail[:10]:
+                    report["issues"].append(f"LLM vision: {detail[:80]}")
                     penalties += 10
-            if "mono: no" in low or "mono:no" in low:
+            if "monochrome: no" in low or "monochrome:no" in low:
                 report["issues"].append("LLM vision: 단색에서 읽히지 않음")
                 penalties += 10
+            if "balance: no" in low or "balance:no" in low:
+                report["issues"].append("LLM vision: 시각적 균형 부족")
+                penalties += 5
+            # SUGGEST 추출
+            if "suggest:" in low:
+                suggest = text.split("SUGGEST:")[-1].strip() if "SUGGEST:" in text else text.split("suggest:")[-1].strip()
+                if suggest:
+                    report["checks"]["vision_suggestion"] = suggest[:200]
         except Exception as e:
             report["checks"]["vision_error"] = str(e)[:100]
 
