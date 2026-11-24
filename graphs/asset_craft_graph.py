@@ -233,18 +233,10 @@ def approve_node(state: CraftState) -> Dict[str, Any]:
         f"style={render['style_id']}: 판정 {chosen['verdict']} · 점수 {chosen['score']}",
     ]
     references = state.get("references") or []
-    if references:
-        names = ", ".join(str(ref.get("name")) for ref in references[:6])
-        roles = ",".join(
-            f"{role}:{count}"
-            for role, count in (state.get("scout_report") or {})
-            .get("filled", {})
-            .items()
-        )
-        suffix = f" [{roles}]" if roles else ""
-        args += ["--decision", f"scout={len(references)}건{suffix}: {names}"]
-    else:
-        args += ["--decision", "scout=0건: 주제어 일치 없음"]
+    args += [
+        "--decision",
+        craft.scout_decision(references, state.get("scout_report")),
+    ]
     args += [
         "--by",
         os.environ.get("SONAGI_CRAFT_BY", "craft-graph"),
