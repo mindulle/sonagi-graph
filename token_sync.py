@@ -29,7 +29,7 @@ tokens/*.json ──▶ parse ──▶ audit ──▶ transpile ──▶ repo
 | --- | --- | --- |
 | `alias_resolution` | `{a.b.c}`가 primitive까지 재귀 해석되는가, 순환·오타(`{font.sans}`) | 착지 실패=warning, 순환·형식오류=error |
 | `no_raw_hex_in_semantic` | semantic 계층의 원시 hex | error |
-| `scales` | 타이포 6단계·space 8px 배수·radius 3단계 | 위반=error(그리드) / 불일치=warning(스케일) |
+| `scales` | 타이포 6단계·space 4px 하프스텝·radius 3단계 값(4/6/8px) | 그리드·radius 값 위반=error, 스케일 불일치=warning |
 | `projection_drift` | `sonagi-assets/tokens/semantic.json`과 값 차이 | warning |
 
 **정본은 고치지 않는다.** 발견은 리포트에만 남기고 사람이 MDS에서 고친다.
@@ -105,6 +105,8 @@ PRIMITIVE_ROOTS = {
 #: 스케일 계약. 값이 아니라 **단계 수**를 본다.
 TYPE_SCALE_STEPS = 6  # h1~h6
 RADIUS_STEPS = 3
+#: radius 3단계 **값** 계약. semantic 레이어 대신 primitive 값을 검사한다(ADR 0010 2-Tier).
+RADIUS_CONTRACT: Dict[str, float] = {"sm": 4.0, "base": 6.0, "md": 8.0}
 GRID_UNIT_PX = 8
 GRID_HALF_STEP_PX = 4
 
@@ -634,7 +636,7 @@ def check_css_var_targets(resolved: Dict[str, Any]) -> List[Finding]:
 def check_scales(
     leaves: Dict[str, Leaf], resolved: Optional[Dict[str, Any]] = None
 ) -> Tuple[List[Finding], Dict[str, Any]]:
-    """타이포 6단계 · space 8px 배수 · radius 3단계."""
+    """타이포 6단계 · space 4px 하프스텝 · radius 3단계 값(4/6/8px)."""
     # 별칭은 raw 문자열이 px가 아니다. raw로 검사하면 계약이 조용히 무력화된다.
     values = {
         path: (resolved or {}).get(path, leaf.value) for path, leaf in leaves.items()
@@ -697,7 +699,7 @@ def check_scales(
                     )
                 )
 
-    # ── space: 8px 배수. 4px 하프스텝은 허용하되 개수만 알린다
+    # ── space: 4px 하프스텝까지 허용. 그 밖은 error
     violations: List[Dict[str, Any]] = []
     half_steps: List[str] = []
     for path in sorted(leaves):
@@ -730,21 +732,11 @@ def check_scales(
                 detail={"value": item["value"]},
             )
         )
-    if half_steps:
-        findings.append(
-            Finding(
-                code="space_half_step",
-                severity="warning",
-                path="spacing",
-                message=(
-                    f"{len(half_steps)}개 간격이 {GRID_UNIT_PX}px 배수가 아니라 "
-                    f"{GRID_HALF_STEP_PX}px 하프스텝에 놓여 있습니다."
-                ),
-                detail={"tokens": half_steps},
-            )
-        )
 
-    # ── radius: semantic 3단계. primitive 스케일은 정보로만 남긴다
+    # ── radius: semantic 레이어를 요구하지 않는다. primitive 3단계 **값** 계약을 본다
+    # radius는 Light/Dark 분기가 없어 semantic 레이어가 할 일이 없다(ADR 0010 2-Tier).
+    # 대신 sm/base/md의 값이 계약(4/6/8px)에서 벗어나면 그때 error다 — 계층이 아니라 값이
+    # 계약이므로, 8px을 80px로 친 오타를 잡는 것이 이 검사의 목적이다.
     primitive_radius = sorted(
         path
         for path in leaves
@@ -757,25 +749,43 @@ def check_scales(
         and ("radius" in path.lower() or "borderradius" in path.lower())
         and not path.startswith("borderWidth")
     )
+    contract: Dict[str, Dict[str, Any]] = {}
+    for step, expected_px in RADIUS_CONTRACT.items():
+        path = f"borderRadius.{step}"
+        px = parse_px(values.get(path))
+        contract[step] = {"path": path, "expected_px": expected_px, "px": px}
+        if px is None:
+            findings.append(
+                Finding(
+                    code="radius_contract_missing",
+                    severity="warning",
+                    path=path,
+                    message=f"radius 계약에 필요한 {step} 단계가 없습니다.",
+                    detail={
+                        "expected_px": expected_px,
+                        "primitive_steps": primitive_radius,
+                    },
+                )
+            )
+        elif px != expected_px:
+            findings.append(
+                Finding(
+                    code="radius_contract_violation",
+                    severity="error",
+                    path=path,
+                    message=(
+                        f"radius.{step}이 {px:g}px입니다. 계약은 {expected_px:g}px입니다."
+                    ),
+                    detail={"expected_px": expected_px, "px": px},
+                )
+            )
     detail["radius"] = {
         "expected": RADIUS_STEPS,
+        "contract": contract,
         "semantic_steps": semantic_radius,
         "primitive_steps": primitive_radius,
     }
-    if not semantic_radius:
-        findings.append(
-            Finding(
-                code="radius_layer_missing",
-                severity="warning",
-                path="borderRadius",
-                message=(
-                    f"radius {RADIUS_STEPS}단계 계약에 해당하는 semantic radius 레이어가 없습니다. "
-                    f"primitive에 {len(primitive_radius)}단계만 있습니다."
-                ),
-                detail={"primitive_steps": primitive_radius},
-            )
-        )
-    elif len(semantic_radius) != RADIUS_STEPS:
+    if semantic_radius and len(semantic_radius) != RADIUS_STEPS:
         findings.append(
             Finding(
                 code="radius_steps_mismatch",
@@ -1967,7 +1977,7 @@ def build_report(
     for check_id, label in (
         ("alias_resolution", "참조가 primitive까지 해석되는가"),
         ("no_raw_hex_in_semantic", "semantic 계층에 원시 hex가 없는가"),
-        ("scales", "타이포 6단계 · space 8px 배수 · radius 3단계"),
+        ("scales", "타이포 6단계 · space 4px 하프스텝 · radius 3단계 값(4/6/8px)"),
         ("projection_drift", "sonagi-assets 투영과 값이 맞는가"),
     ):
         related = [
@@ -1993,8 +2003,8 @@ def build_report(
                     "type_scale_mismatch",
                     "type_scale_order",
                     "space_grid_violation",
-                    "space_half_step",
-                    "radius_layer_missing",
+                    "radius_contract_missing",
+                    "radius_contract_violation",
                     "radius_steps_mismatch",
                 },
                 "projection_drift": {
