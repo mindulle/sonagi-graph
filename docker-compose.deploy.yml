@@ -17,6 +17,7 @@ services:
     volumes:
       - /home/ubuntu/llm-wiki:/home/ubuntu/llm-wiki
       - /home/ubuntu/sonagi-assets:/home/ubuntu/sonagi-assets
+      - /home/ubuntu/sonagi-work:/home/ubuntu/sonagi-work:ro
       - /home/ubuntu/mindulle-design-system/packages/tokens:/home/ubuntu/mindulle-design-system/packages/tokens:ro
       - /var/www/craft-suite:/var/www/craft-suite
       - /usr/local/bin/filmcraft-cli:/usr/local/bin/filmcraft-cli:ro
@@ -28,6 +29,7 @@ services:
       OPENAI_API_BASE: http://172.19.0.1:38107/v1
       SEARXNG_URL: http://172.19.0.1:8080
       SONAGI_ASSETS_DIR: /home/ubuntu/sonagi-assets
+      SONAGI_PRESS_DIR: /home/ubuntu/sonagi-work
       SONAGI_WIKI_DIR: /home/ubuntu/llm-wiki
       SONAGI_CDN_VIDEO_DIR: /var/www/craft-suite/video/exports
       MDS_TOKENS_DIR: /home/ubuntu/mindulle-design-system/packages/tokens
