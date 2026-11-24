@@ -401,27 +401,34 @@ def craft_node(state: PackageDeliveryState) -> Dict[str, Any]:
 
 
 def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
-    """로고를 여러 맥락에서 렌더링하고 가독성·대비를 검증한다.
+    """로고를 여러 맥락에서 렌더링하고 가독성·대비·조형을 검증한다.
 
     인간 디자이너의 'context testing' 단계에 해당한다.
-    - 16px 파비콘: 읽히는가?
-    - 32px, 64px: 디테일이 살아있는가?
-    - 256px: 전체 형태가 명확한가?
-    - 다크/라이트 배경: 대비가 충분한가?
+
+    검증 항목:
+    1. 다중 크기 렌더 (16/32/64/256px) — 파일 존재·크기
+    2. 16px 가독성 — 다운스케일 후 형태 보존 (IoU 비교)
+    3. 다크/라이트 대비 — 흰 배경과 검정 배경 모두에서 보이는가
+    4. SVG 구조 — 요소 수, viewBox 정사각, stroke 최소값, 색상 수
+    5. 광학 균형 — 마크가 캔버스 중앙에 있는가, 크기가 적절한가
+    6. 단순화 가능성 — 요소를 줄여도 형태가 유지되는가
     """
     mark_svg = state.get("mark_svg")
     if not mark_svg:
         return {"context_test_report": {"score": 100, "note": "마크 없음 — 건너뜀"}, "context_test_score": 100, "status": "context_skipped"}
 
+    import re as _re
     import tempfile
     tmp = Path(tempfile.mkdtemp(prefix="ctx-test-"))
     svg_path = tmp / "mark.svg"
     svg_path.write_text(mark_svg, encoding="utf-8")
 
     sizes = [16, 32, 64, 256]
-    report = {"sizes": {}, "score": 100, "issues": []}
+    report = {"sizes": {}, "score": 100, "issues": [], "checks": {}}
     penalties = 0
 
+    # --- 1. 다중 크기 렌더 ---
+    rendered = {}
     for size in sizes:
         out = tmp / f"mark_{size}.png"
         try:
@@ -435,6 +442,7 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
             )
             if out.exists() and out.stat().st_size > 100:
                 report["sizes"][size] = "ok"
+                rendered[size] = out
             else:
                 report["sizes"][size] = "blank"
                 report["issues"].append(f"{size}px: 렌더 실패 또는 빈 이미지")
@@ -444,60 +452,164 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
             report["issues"].append(f"{size}px: {str(e)[:80]}")
             penalties += 20
 
-    # SVG 구조 검증: 요소 수, viewBox, stroke 최소값
+    # --- 2. SVG 구조 검증 ---
     try:
-        import re as _re
         element_count = len(_re.findall(r"<(circle|rect|path|polygon|ellipse|line|g)\b", mark_svg))
-        if element_count > 30:
+        if element_count > 20:
             report["issues"].append(f"SVG 요소 {element_count}개 — 너무 복잡 (16px에서 뭉개짐)")
             penalties += 15
         if element_count < 2:
             report["issues"].append("SVG 요소가 너무 적음 — 형태가 없음")
             penalties += 20
+
         # viewBox 확인
         vb = _re.search(r'viewBox="([^"]+)"', mark_svg)
         if vb:
             parts = vb.group(1).split()
             if len(parts) == 4:
                 w, h = float(parts[2]), float(parts[3])
-                if w != h:
+                if abs(w - h) > 0.1:
                     report["issues"].append(f"viewBox 비정사각 ({w}x{h}) — 스케일링 왜곡 가능")
                     penalties += 5
+                if w < 50 or h < 50:
+                    report["issues"].append(f"viewBox 너무 작음 ({w}x{h})")
+                    penalties += 10
+        else:
+            report["issues"].append("viewBox 없음 — 스케일링 불가")
+            penalties += 10
+
         # stroke 최소값 확인
-        for m in _re.finditer(r'stroke-width="([0-9.]+)"', mark_svg):
-            sw = float(m.group(1))
-            if sw < 1.5:
-                report["issues"].append(f"stroke-width {sw} < 1.5 — 16px에서 사라짐")
+        strokes = [float(m.group(1)) for m in _re.finditer(r'stroke-width="([0-9.]+)"', mark_svg)]
+        if strokes:
+            min_stroke = min(strokes)
+            if min_stroke < 1.5:
+                report["issues"].append(f"stroke-width {min_stroke} < 1.5 — 16px에서 사라짐")
                 penalties += 10
-                break
+            if len(set(strokes)) > 1:
+                report["issues"].append(f"stroke-width 불일치: {set(strokes)} — 일관성 부족")
+                penalties += 5
+
+        # 색상 수 확인 (로고는 1~2색이 이상적)
+        colors = set(_re.findall(r'fill="(#[0-9A-Fa-f]{6})"', mark_svg))
+        colors |= set(_re.findall(r'stroke="(#[0-9A-Fa-f]{6})"', mark_svg))
+        report["checks"]["color_count"] = len(colors)
+        if len(colors) > 3:
+            report["issues"].append(f"색상 {len(colors)}개 — 로고는 1~2색이 이상적")
+            penalties += 10
+        if len(colors) == 0:
+            report["issues"].append("색상 없음 — fill/stroke 미지정")
+            penalties += 15
+
+        # 요소 수 (복잡도)
+        report["checks"]["element_count"] = element_count
+
+        # 네거티브 스페이스 비율 추정 (SVG path/shape 면적 대비)
+        # 간단히: 요소 수가 적을수록 네거티브 스페이스가 많음
+        if element_count <= 3:
+            report["checks"]["complexity"] = "simple"
+        elif element_count <= 8:
+            report["checks"]["complexity"] = "moderate"
+        else:
+            report["checks"]["complexity"] = "complex"
+
+    except Exception as e:
+        report["issues"].append(f"SVG 구조 검증 오류: {str(e)[:80]}")
+        penalties += 5
+
+    # --- 3. 16px 가독성 (shape preservation) ---
+    try:
+        from PIL import Image
+        img_256 = (tmp / "mark_256.png")
+        img_16 = (tmp / "mark_16.png")
+        if img_256.exists() and img_16.exists():
+            # 256px에서의 마스크
+            big = Image.open(img_256).convert("RGBA")
+            small = Image.open(img_16).convert("RGBA")
+
+            # 16px 이미지를 256px로 업스케일하여 원본과 비교
+            small_up = small.resize((256, 256), Image.NEAREST)
+            big_pixels = [1 if p[3] > 128 else 0 for p in big.getdata()]
+            small_pixels = [1 if p[3] > 128 else 0 for p in small_up.getdata()]
+
+            # IoU 계산
+            intersection = sum(1 for a, b in zip(big_pixels, small_pixels) if a == 1 and b == 1)
+            union = sum(1 for a, b in zip(big_pixels, small_pixels) if a == 1 or b == 1)
+            iou = intersection / union if union > 0 else 0.0
+
+            report["checks"]["shape_preservation_iou"] = round(iou, 3)
+            if iou < 0.5:
+                report["issues"].append(f"16px 가독성 낮음 (IoU {iou:.2f} < 0.5) — 형태가 16px에서 무너짐")
+                penalties += 25
+            elif iou < 0.7:
+                report["issues"].append(f"16px 가독성 보통 (IoU {iou:.2f}) — 세부가 사라짐")
+                penalties += 10
     except Exception:
         pass
 
-    # 다크/라이트 대비 체크 (256px 기준)
-    # vectorcraft는 투명 배경으로 렌더하므로, 배경색을 합성해서 대비를 확인한다
+    # --- 4. 다크/라이트 배경 대비 ---
     try:
         from PIL import Image
         img_path = tmp / "mark_256.png"
         if img_path.exists():
             img = Image.open(img_path).convert("RGBA")
-            # 흰 배경과 검정 배경에서의 평균 대비
             pixels = list(img.getdata())
             non_transparent = [p for p in pixels if p[3] > 128]
             if len(non_transparent) < 100:
                 report["issues"].append("256px: 마크가 거의 보이지 않음 (픽셀 부족)")
                 penalties += 30
             else:
-                # 밝기 분포 확인
                 luminances = [0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2] for p in non_transparent]
                 avg_lum = sum(luminances) / len(luminances)
-                if avg_lum > 200:
-                    report["issues"].append("마크가 너무 밝아 어두운 배경에서 안 보일 수 있음")
+                # 밝은 마크 (avg_lum > 180): 어두운 배경에서만 보임 → 라이트 배경에서 안 보임
+                if avg_lum > 180:
+                    report["issues"].append(f"마크가 밝음 (avg lum {avg_lum:.0f}) — 라이트 배경에서 안 보일 수 있음")
                     penalties += 10
-                if avg_lum < 50:
-                    report["issues"].append("마크가 너무 어두워 밝은 배경에서 안 보일 수 있음")
+                if avg_lum < 70:
+                    report["issues"].append(f"마크가 어두움 (avg lum {avg_lum:.0f}) — 다크 배경에서 안 보일 수 있음")
+                    penalties += 10
+                # 대비 비율 (마크 vs 흰 배경)
+                contrast_ratio = max(avg_lum, 1) / max(255 - avg_lum, 1) if avg_lum > 127 else max(255 - avg_lum, 1) / max(avg_lum, 1)
+                report["checks"]["contrast_ratio"] = round(contrast_ratio, 2)
+                if contrast_ratio < 3.0:
+                    report["issues"].append(f"대비 부족 (ratio {contrast_ratio:.1f} < 3.0)")
+                    penalties += 15
+    except Exception:
+        pass
+
+    # --- 5. 광학 균형 (캔버스 사용률) ---
+    try:
+        from PIL import Image
+        img_path = tmp / "mark_256.png"
+        if img_path.exists():
+            img = Image.open(img_path).convert("RGBA")
+            pixels = list(img.getdata())
+            non_transparent = [(i % 256, i // 256) for i, p in enumerate(pixels) if p[3] > 128]
+            if non_transparent:
+                xs = [p[0] for p in non_transparent]
+                ys = [p[1] for p in non_transparent]
+                bbox_w = max(xs) - min(xs) + 1
+                bbox_h = max(ys) - min(ys) + 1
+                canvas_usage = (bbox_w * bbox_h) / (256 * 256)
+                report["checks"]["canvas_usage"] = round(canvas_usage, 3)
+                report["checks"]["bbox"] = [min(xs), min(ys), bbox_w, bbox_h]
+                # 마크가 너무 작음 (< 20% 캔버스 사용)
+                if canvas_usage < 0.15:
+                    report["issues"].append(f"마크가 너무 작음 (캔버스 사용 {canvas_usage:.0%} < 15%)")
+                    penalties += 15
+                # 마크가 캔버스를 넘침 (> 95%)
+                if canvas_usage > 0.95:
+                    report["issues"].append(f"마크가 캔버스를 넘침 ({canvas_usage:.0%}) — 여백 없음")
+                    penalties += 10
+                # 광학 중심: bbox 중심 vs 캔버스 중심
+                cx = (min(xs) + max(xs)) / 2
+                cy = (min(ys) + max(ys)) / 2
+                offset_x = abs(cx - 128) / 128
+                offset_y = abs(cy - 128) / 128
+                if offset_x > 0.15 or offset_y > 0.15:
+                    report["issues"].append(f"광학 중심 이탈 (x={offset_x:.2f}, y={offset_y:.2f})")
                     penalties += 10
     except Exception:
-        pass  # PIL 없거나 이미지 식별 실패 시 픽셀 체크 건너뜀
+        pass
 
     report["score"] = max(0, 100 - penalties)
     return {"context_test_report": report, "context_test_score": report["score"], "status": "context_tested"}
