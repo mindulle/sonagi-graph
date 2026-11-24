@@ -27,6 +27,30 @@ Sonagi 생태계의 다양한 에이전틱 그래프(Agentic Graphs)를 정의�
 | `knowledge_harvester` | `graphs/knowledge_harvester_graph.py` | 공공 오픈 데이터 6곳 → 위키 카탈로그 | 공개 API (키 불필요) | – |
 | `source_verification` | `graphs/source_verification_graph.py` | SearXNG 검색 → LLM 신뢰도 심사 → 볼트 | 로컬 `SearXNG`, LLM 프록시 | `loader` 직전 |
 
+### 서버에서 실행하고 Kimaki로 승인하기
+
+배포된 LangGraph 서버(`:8123`)는 그래프를 assistant로 노출한다. `scripts/graph_cli.py`는
+서버 HTTP API만 쓰므로, 그래프 코드를 import하지 않고 Kimaki/Discord 세션에서 그대로 호출할 수 있다.
+
+```bash
+python3 scripts/graph_cli.py list
+python3 scripts/graph_cli.py run error_triage \
+    --input '{"messages":[{"role":"user","content":"TypeError: ..."}]}' --wait
+# HITL 그래프는 여기서 멈추고 thread_id를 출력한다
+python3 scripts/graph_cli.py status <thread_id>
+python3 scripts/graph_cli.py approve <thread_id> --graph copywriting_craft \
+    --values '{"selected_option_index":1}' --wait
+```
+
+`LANGGRAPH_URL`로 서버 주소를 바꾼다(기본 `http://127.0.0.1:8123`).
+
+Kimaki 흐름:
+
+1. 사용자가 Discord에서 "이 에러 분석해줘"라고 하면 Kimaki가
+   `graph_cli.py run error_triage ... --wait`를 실행하고 리포트를 붙인다.
+2. HITL 그래프는 `next=[...]`와 `thread_id`를 남긴다. Kimaki가 선택지를 보여주고,
+   사용자가 고르면 `graph_cli.py approve`로 재개한다.
+
 ### 그래프를 추가할 때
 
 1. `graphs/<name>_graph.py`에 `graph = builder.compile(...)`를 둔다. 이름은 반드시 `graph`.
