@@ -7,6 +7,8 @@ import pytest
 from langchain_core.runnables import RunnableLambda
 
 from graphs import visual_consistency_graph as mod
+from langgraph.checkpoint.memory import MemorySaver
+mod.graph = mod.build_visual_consistency_graph(checkpointer=MemorySaver())
 from graphs.visual_consistency_graph import (
     ImageryCritiqueResult,
     MotionCritiqueResult,

@@ -8,6 +8,8 @@ import pytest
 from langchain_core.runnables import RunnableLambda
 
 from graphs import editorial_verification_graph as mod
+from langgraph.checkpoint.memory import MemorySaver
+mod.graph = mod.build_editorial_verification_graph(checkpointer=MemorySaver())
 from graphs.editorial_verification_graph import (
     AcademicCitationEvaluation,
     AestheticStanceEvaluation,

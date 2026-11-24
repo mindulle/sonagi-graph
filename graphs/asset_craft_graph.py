@@ -36,7 +36,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import craft  # noqa: E402
 
-from langgraph.checkpoint.memory import MemorySaver  # noqa: E402
+
 from langgraph.graph import END, START, StateGraph  # noqa: E402
 from langgraph.graph.message import add_messages  # noqa: E402
 from langchain_core.messages import AIMessage  # noqa: E402
@@ -254,7 +254,7 @@ def approve_node(state: CraftState) -> Dict[str, Any]:
     }
 
 
-def build_graph():
+def build_graph(checkpointer=None):
     graph = StateGraph(CraftState)
     graph.add_node("brief", brief_node)
     graph.add_node("scout", scout_node)
@@ -273,7 +273,7 @@ def build_graph():
     graph.add_edge("select", "approve")
     graph.add_edge("approve", END)
 
-    return graph.compile(checkpointer=MemorySaver(), interrupt_before=["approve"])
+    return graph.compile(checkpointer=checkpointer, interrupt_before=["approve"])
 
 
 graph = build_graph()

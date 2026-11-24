@@ -13,11 +13,12 @@ from pprint import pprint
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from graphs.design_ops_graph import build_graph
+from langgraph.checkpoint.memory import MemorySaver
 
 
 def run_hitl_graph():
     print("=== 🚀 DesignOpsGraph HITL 수동 검증 시작 ===")
-    graph = build_graph()
+    graph = build_graph(checkpointer=MemorySaver())
 
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}

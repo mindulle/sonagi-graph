@@ -49,7 +49,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import token_sync as ts  # noqa: E402
 
-from langgraph.checkpoint.memory import MemorySaver  # noqa: E402
+# (체크포인터는 호출자가 주입한다. 서버에서는 None → 플랫폼이 영속성을 담당.)
 from langgraph.graph import END, START, StateGraph  # noqa: E402
 
 #: 우회 env는 두지 않는다. 브리지 검증은 /health의 connectedClients만 믿는다.
@@ -366,7 +366,7 @@ def route_after_hitl(state: DesignTokenSyncState) -> str:
 # ---------------------------------------------------------------- 그래프
 
 
-def build_graph(checkpointer: Optional[Any] = None):
+def build_graph(checkpointer=None):
     """컴파일된 그래프. 승인 게이트 두 곳에서 멈춘다."""
     builder = StateGraph(DesignTokenSyncState)
     builder.add_node("token_parse", token_parse_node)
@@ -387,7 +387,7 @@ def build_graph(checkpointer: Optional[Any] = None):
     builder.add_edge("figma_apply", END)
 
     return builder.compile(
-        checkpointer=checkpointer or MemorySaver(),
+        checkpointer=checkpointer,
         interrupt_before=["hitl_checkpoint", "figma_apply"],
     )
 

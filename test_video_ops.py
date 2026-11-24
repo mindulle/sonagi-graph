@@ -9,6 +9,7 @@ import subprocess
 import pytest
 
 from graphs import video_ops_graph as mod
+from langgraph.checkpoint.memory import MemorySaver
 
 
 def _out_target(cmd):
@@ -59,7 +60,7 @@ def test_brief_node_builds_four_scenes():
 
 
 def test_graph_pauses_before_export(env):
-    graph = mod.build_video_ops_graph()
+    graph = mod.build_video_ops_graph(checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": "unit-pause"}}
 
     list(graph.stream({"run_id": "r1", "brief": "Demo: Unit"}, config=config))
@@ -75,7 +76,7 @@ def test_graph_pauses_before_export(env):
 
 
 def test_resume_after_approval_publishes_to_cdn(env):
-    graph = mod.build_video_ops_graph()
+    graph = mod.build_video_ops_graph(checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": "unit-approve"}}
 
     list(graph.stream({"run_id": "r2", "brief": "Demo: Unit"}, config=config))

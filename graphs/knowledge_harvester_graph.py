@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import TypedDict, List, Dict, Any, Optional
 
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
 
 from graphs.llm import wiki_dir
 
@@ -540,7 +539,7 @@ def wiki_compactor_node(state: HarvesterState) -> Dict[str, Any]:
 # -------------------------------------------------------------
 # Graph Builder
 # -------------------------------------------------------------
-def build_knowledge_harvester_graph():
+def build_knowledge_harvester_graph(checkpointer=None):
     builder = StateGraph(HarvesterState)
     
     builder.add_node("open_library", open_library_node)
@@ -562,7 +561,6 @@ def build_knowledge_harvester_graph():
     builder.add_edge("curriculum_indexer", "wiki_compactor")
     builder.add_edge("wiki_compactor", END)
     
-    memory = MemorySaver()
-    return builder.compile(checkpointer=memory)
+    return builder.compile(checkpointer=checkpointer)
 
 graph = build_knowledge_harvester_graph()

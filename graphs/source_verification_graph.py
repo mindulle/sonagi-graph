@@ -6,7 +6,6 @@ import datetime
 from typing import Annotated, TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from langgraph.types import Send
-from langgraph.checkpoint.memory import MemorySaver
 
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
@@ -157,5 +156,7 @@ builder.add_edge("discovery", "verifier")
 builder.add_edge("verifier", "loader")
 builder.add_edge("loader", END)
 
-memory = MemorySaver()
-graph = builder.compile(checkpointer=memory, interrupt_before=["loader"])
+def build_source_verification_graph(checkpointer=None):
+    return builder.compile(checkpointer=checkpointer, interrupt_before=["loader"])
+
+graph = build_source_verification_graph()

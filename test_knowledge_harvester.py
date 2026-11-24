@@ -9,6 +9,8 @@ import json
 import pytest
 
 from graphs import knowledge_harvester_graph as mod
+from langgraph.checkpoint.memory import MemorySaver
+mod.graph = mod.build_knowledge_harvester_graph(checkpointer=MemorySaver())
 
 
 class _Resp:

@@ -622,9 +622,10 @@ langgraph_ready = pytest.mark.skipif(not HAS_LANGGRAPH, reason="langgraph 미설
 @langgraph_ready
 def test_graph_pauses_before_hitl_and_records_report(tmp_path):
     from graphs.design_token_sync_graph import build_graph
+    from langgraph.checkpoint.memory import MemorySaver
 
     root = fixture_root(tmp_path)
-    graph = build_graph()
+    graph = build_graph(checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": f"t-{tmp_path.name}"}}
 
     graph.invoke(
@@ -660,11 +661,12 @@ def test_graph_pauses_before_hitl_and_records_report(tmp_path):
 @langgraph_ready
 def test_graph_stops_when_errors_block_compilation(tmp_path):
     from graphs.design_token_sync_graph import build_graph
+    from langgraph.checkpoint.memory import MemorySaver
 
     doc = semantics()
     doc["semantic"]["light"]["color"]["text"]["primary"]["$value"] = "#abcdef"
     root = fixture_root(tmp_path, **{"semantics.json": doc})
-    graph = build_graph()
+    graph = build_graph(checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": f"blocked-{tmp_path.name}"}}
 
     state = graph.invoke(
@@ -838,9 +840,10 @@ def test_same_hash_across_output_directories(tmp_path):
 @langgraph_ready
 def test_graph_rejection_stops_before_figma(tmp_path):
     from graphs.design_token_sync_graph import build_graph
+    from langgraph.checkpoint.memory import MemorySaver
 
     root = fixture_root(tmp_path)
-    graph = build_graph()
+    graph = build_graph(checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": f"reject-{tmp_path.name}"}}
 
     graph.invoke(
@@ -864,9 +867,10 @@ def test_graph_rejection_stops_before_figma(tmp_path):
 def test_graph_refuses_stale_approval(tmp_path):
     """승인과 재개 사이에 정본이 바뀌면 사람이 보지 않은 산출물에 도장을 찍지 않는다."""
     from graphs.design_token_sync_graph import build_graph
+    from langgraph.checkpoint.memory import MemorySaver
 
     root = fixture_root(tmp_path)
-    graph = build_graph()
+    graph = build_graph(checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": f"stale-{tmp_path.name}"}}
     graph.invoke(
         {

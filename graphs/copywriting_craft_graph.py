@@ -5,7 +5,6 @@ from typing import Annotated, TypedDict, List, Dict, Any, Optional
 
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.prompts import ChatPromptTemplate
 
 from graphs.llm import chat_model
@@ -180,7 +179,7 @@ def publish_copy_node(state: CopywritingState) -> Dict[str, Any]:
 # 4. Graph Construction & Compilation
 # ---------------------------------------------------------------------------
 
-def build_copywriting_craft_graph():
+def build_copywriting_craft_graph(checkpointer=None):
     builder = StateGraph(CopywritingState)
 
     builder.add_node("cliche_filter", cliche_filter_node)
@@ -200,12 +199,10 @@ def build_copywriting_craft_graph():
     )
     builder.add_edge("publish_copy", END)
 
-    memory = MemorySaver()
-
     # 옵션 3개가 준비된 뒤, 감독이 하나를 고르기 전까지 멈춘다 (HITL).
     # 결재 노드(hitl_checkpoint)가 선택 인덱스를 읽어야 하므로 그 직전에서 멈춰야 한다.
     return builder.compile(
-        checkpointer=memory,
+        checkpointer=checkpointer,
         interrupt_before=["hitl_checkpoint"]
     )
 

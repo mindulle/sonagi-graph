@@ -7,7 +7,6 @@ from typing import Annotated, TypedDict, List, Dict, Any, Optional
 
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.prompts import ChatPromptTemplate
 
 from graphs.llm import chat_model, wiki_dir
@@ -425,6 +424,9 @@ builder.add_edge("diagram_critic", "chief_editor")
 builder.add_edge("chief_editor", "vault_loader")
 builder.add_edge("vault_loader", END)
 
-# Memory Checkpointer 바인딩 및 interrupt_before 적용
-memory = MemorySaver()
-graph = builder.compile(checkpointer=memory, interrupt_before=["vault_loader"])
+def build_editorial_verification_graph(checkpointer=None):
+    return builder.compile(checkpointer=checkpointer, interrupt_before=["vault_loader"])
+
+# 서버/플랫폼에서는 체크포인터를 주입하지 않는다(플랫폼이 영속성을 담당).
+# 로컬 HITL 테스트에서는 build_editorial_verification_graph(checkpointer=MemorySaver())로 호출.
+graph = build_editorial_verification_graph()

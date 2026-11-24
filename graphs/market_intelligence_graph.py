@@ -3,7 +3,6 @@ from typing import Annotated, TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.types import Send
-from langgraph.checkpoint.memory import MemorySaver
 import json
 
 # 1. State Definition
@@ -83,10 +82,11 @@ builder.add_edge("collector", "analyzer")
 builder.add_edge("analyzer", "loader")
 builder.add_edge("loader", END)
 
-memory = MemorySaver()
+def build_market_intelligence_graph(checkpointer=None):
+    # Loader(DB 적재) 직전에 실행을 일시 정지하여 사람의 승인(HITL)을 기다립니다.
+    return builder.compile(
+        checkpointer=checkpointer,
+        interrupt_before=["loader"]
+    )
 
-# Loader(DB 적재) 직전에 실행을 일시 정지하여 사람의 승인(HITL)을 기다립니다.
-graph = builder.compile(
-    checkpointer=memory,
-    interrupt_before=["loader"]
-)
+graph = build_market_intelligence_graph()
