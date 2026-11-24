@@ -394,15 +394,34 @@ def generator_node(state: DesignOpsState) -> Dict[str, Any]:
         cmd_png = [VECTORCRAFT_BIN, "convert", str(svg_path), str(png_path)]
         subprocess.run(cmd_png, check=True, capture_output=True)
         
-        # 3. VectorCraft Info 추출
-        cmd_info = [VECTORCRAFT_BIN, "info", str(svg_path)]
-        info_res = subprocess.run(cmd_info, capture_output=True, text=True)
-        info_json = json.loads(info_res.stdout) if info_res.returncode == 0 else {}
-        
-        # 4. VectorCraft Bench 성능 측정
-        cmd_bench = [VECTORCRAFT_BIN, "bench", str(svg_path)]
-        bench_res = subprocess.run(cmd_bench, capture_output=True, text=True)
-        bench_out = bench_res.stdout.strip()
+        # 3. VectorCraft 문서 구조 추출
+        #    `info`·`bench` 서브커맨드는 vectorcraft-cli 0.11에 없다(도움말: mcp·run·commands·convert).
+        #    구조는 `run --cmd document.inspect`로 받고, 시간은 직접 잰다.
+        started = time.time()
+        cmd_inspect = [VECTORCRAFT_BIN, "run", "--in", str(svg_path), "--cmd", "document.inspect"]
+        inspect_res = subprocess.run(cmd_inspect, capture_output=True, text=True)
+        inspect_ms = int((time.time() - started) * 1000)
+        inspect: Dict[str, Any] = {}
+        for line in inspect_res.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if payload.get("step") == "cmd" and payload.get("command") == "document.inspect":
+                inspect = payload.get("result") or {}
+                break
+        kinds: Dict[str, int] = {}
+        for layer in inspect.get("layers") or []:
+            stack = [layer]
+            while stack:
+                node = stack.pop()
+                kind = node.get("kind")
+                if kind:
+                    kinds[kind] = kinds.get(kind, 0) + 1
+                stack.extend(node.get("children") or [])
         
         draft_item = {
             "index": idx,
@@ -419,9 +438,9 @@ def generator_node(state: DesignOpsState) -> Dict[str, Any]:
                 "pdf_bytes": pdf_path.stat().st_size,
                 "png_bytes": png_path.stat().st_size
             },
-            "nodes_count": info_json.get("info", {}).get("objects", 0),
-            "kinds": info_json.get("kinds", {}),
-            "bench": bench_out
+            "nodes_count": inspect.get("objects", 0),
+            "kinds": kinds,
+            "inspect_ms": inspect_ms
         }
         drafts.append(draft_item)
         print(f"  ✓ {arch['name']} 생성 완료 (Nodes: {draft_item['nodes_count']}, Size: {draft_item['file_sizes']['svg_bytes']}B)")

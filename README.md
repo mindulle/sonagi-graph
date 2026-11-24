@@ -8,6 +8,33 @@ Sonagi 생태계의 다양한 에이전틱 그래프(Agentic Graphs)를 정의�
 - `llmops-instance` 서버에 배포되어 백그라운드 워커로 작동합니다.
 - **Paperclip**과 **Kimaki**를 통해 모니터링, 제어(HITL), 오케스트레이션이 이루어집니다.
 
+## 크래프트 앱 호출 (VectorCraft)
+
+VectorCraft는 바이너리가 **둘**이고 역할이 다르다. 헷갈리면 "왜 안 되지"에서 한 시간을 쓴다.
+
+| 바이너리 | 용도 | 실행 조건 |
+| --- | --- | --- |
+| `vectorcraft` | 데스크톱 앱 · `--control PORT`로 제어 포트 개방 | **DISPLAY 필요**(없으면 winit 오류로 즉시 종료) |
+| `vectorcraft-cli` | 헤드리스 자동화 | DISPLAY 불필요 |
+
+```bash
+# 문서 → PDF/PNG/vectorcraft(AST)
+vectorcraft-cli convert in.svg out.pdf
+vectorcraft-cli convert in.svg out.png --scale 2
+
+# 명령 배치(구조 검사·내보내기)
+vectorcraft-cli run --in in.svg --cmd document.inspect --export out.png
+
+# 설치된 명령 749개 목록(저작·recolor 포함)
+vectorcraft-cli commands | jq 'length'
+```
+
+`graphs/design_ops_graph.py`는 `shutil.which("vectorcraft-cli")`로 CLI를 찾는다.
+문서 구조는 `info`가 아니라 **`run --cmd document.inspect`**로 받는다(`info`·`bench`
+서브커맨드는 0.11에 없다). 응답은 JSON 한 줄씩 흘러나오므로 `step == "cmd"` 라인만 쓴다.
+
+실측(2026-11-24, sonagi wordmark 450×116): `objects 12 · Path 9 · Compound Path 2`, 4ms.
+
 ## 시작하기
 
 ```bash
