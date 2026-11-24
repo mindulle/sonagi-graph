@@ -6,7 +6,7 @@ Sonagi 생태계의 다양한 에이전틱 그래프(Agentic Graphs)를 정의�
 
 - **LangGraph** 기반의 Python 코드로 워크플로우를 설계합니다.
 - `llmops-instance` 서버에 배포되어 백그라운드 워커로 작동합니다.
-- **Paperclip**과 **Kimaki**를 통해 모니터링, 제어(HITL), 오케스트레이션이 이루어집니다.
+- **Kimaki**를 통해 모니터링·제어(HITL)·오케스트레이션이 이루어지도록 설계되어 있으나, 그래프 재개(resume) 연동은 아직 구현되지 않았습니다.
 
 ## 등록된 그래프
 
@@ -17,7 +17,7 @@ Sonagi 생태계의 다양한 에이전틱 그래프(Agentic Graphs)를 정의�
 | `spike_test` | `graphs/spike_test_graph.py` | LangGraph 배선 확인용 최소 그래프 | 없음 | – |
 | `error_triage` | `graphs/error_triage_graph.py` | 센트리 오류 트리아지 | LLM 프록시 | – |
 | `market_intelligence` | `graphs/market_intelligence_graph.py` | 시장 신호 수집·분석 → DB 적재 | LLM 프록시, `requests` | `loader` 직전 |
-| `design_ops` | `graphs/design_ops_graph.py` | ArtCraft 시안 3안 → 선택 | `vectorcraft-cli`, Paperclip | `publish` 직전 |
+| `design_ops` | `graphs/design_ops_graph.py` | ArtCraft 시안 3안 → 선택 | `vectorcraft-cli` | `publish` 직전 |
 | `asset_craft` | `graphs/asset_craft_graph.py` | 브리프 → 렌더 후보 3안 | 크래프트 CLI, `sonagi-assets` | `select` 직전 |
 | `design_token_sync` | `graphs/design_token_sync_graph.py` | 토큰 정본 → 소비처 컴파일 | `sonagi-assets`, MDS | 승인 게이트 |
 | `video_ops` | `graphs/video_ops_graph.py` | EffectCraft 모션 + FilmCraft 컷편집 → CDN | `effectcraft-cli`, `filmcraft-cli` | `export_and_publish` 직전 |
