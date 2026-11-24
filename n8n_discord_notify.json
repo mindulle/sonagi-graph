@@ -11,7 +11,10 @@
       "name": "LangGraph Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 1,
-      "position": [250, 300]
+      "position": [
+        250,
+        300
+      ]
     },
     {
       "parameters": {
@@ -19,13 +22,16 @@
         "url": "https://discord.com/api/webhooks/1547874538006781974/N4s030quOINZE_pX1cAEwTqB60-dOoxQcUUykDwXkokjWFeSWnHO1KHgMXFmCIV40Ebv",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"content\": \"{{ $json.body.report }}\"\n}",
+        "jsonBody": "={{ { \"content\": $json.body.report || \"(no report)\" } }}",
         "options": {}
       },
       "name": "Send to Discord",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [450, 300]
+      "position": [
+        450,
+        300
+      ]
     }
   ],
   "connections": {
