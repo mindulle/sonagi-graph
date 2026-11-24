@@ -662,7 +662,9 @@ def test_missing_primitives_is_error_and_blocks_write(tmp_path):
 def test_duplicate_token_across_files_warns(tmp_path):
     doc = primitives()
     doc["typography"] = {"h1": {"fontSize": {"$value": "99px", "$type": "dimension"}}}
-    root = write_tokens(tmp_path, {"primitives.json": doc, "semantics.json": semantics()})
+    root = write_tokens(
+        tmp_path, {"primitives.json": doc, "semantics.json": semantics()}
+    )
     analysis, _ = ts.analyze(root, tmp_path / "nope.json")
 
     assert "duplicate_token" in codes(analysis)
@@ -707,11 +709,15 @@ def test_projection_token_missing_warns(tmp_path, monkeypatch):
     monkeypatch.setitem(ts.PROJECTION_MAP["editorial"], "danger", "state.missing")
     root = fixture_root(tmp_path)
     projection = tmp_path / "semantic.json"
-    projection.write_text(json.dumps({"editorial": {"danger": "#0055ff"}}), encoding="utf-8")
+    projection.write_text(
+        json.dumps({"editorial": {"danger": "#0055ff"}}), encoding="utf-8"
+    )
     analysis, _ = ts.analyze(root, projection)
 
     tokens = {
-        f.detail["token"] for f in analysis.findings if f.code == "projection_token_missing"
+        f.detail["token"]
+        for f in analysis.findings
+        if f.code == "projection_token_missing"
     }
     assert "semantic.light.color.state.missing" in tokens
 
@@ -737,7 +743,7 @@ def test_probe_bridge_requires_json_version(monkeypatch):
         status = 200
 
         def read(self, size):
-            return b'{"Browser": "Figma/1"}'
+            return b'{"status":"ok","version":"1.40.9","connectedClients":1}'
 
         def __enter__(self):
             return self
@@ -746,7 +752,33 @@ def test_probe_bridge_requires_json_version(monkeypatch):
             return False
 
     monkeypatch.setattr(ts.urllib.request, "urlopen", lambda *a, **k: Response())
-    assert ts.probe_bridge([9223])["verified"] is True
+    probe = ts.probe_bridge([9223])
+    assert probe["verified"] is True
+    assert probe["connectedClients"] == 1
+    assert probe["probes"][0]["url"].endswith("/health")
+
+
+def test_probe_bridge_rejects_open_port_without_plugin(monkeypatch):
+    """포트가 열려 있어도 플러그인이 안 붙었으면(connectedClients=0) 쓰면 안 된다."""
+
+    class Response:
+        status = 200
+
+        def read(self, size):
+            return (
+                b'{"status":"ok","version":"1.40.9","clients":0,"connectedClients":0}'
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(ts.urllib.request, "urlopen", lambda *a, **k: Response())
+    probe = ts.probe_bridge([9224])
+    assert probe["verified"] is False
+    assert probe["probes"][0]["reason"] == "플러그인 미연결(connectedClients=0)"
 
 
 def test_preview_writes_nothing_and_agrees_with_compile(tmp_path):
