@@ -8,6 +8,33 @@ Sonagi 생태계의 다양한 에이전틱 그래프(Agentic Graphs)를 정의�
 - `llmops-instance` 서버에 배포되어 백그라운드 워커로 작동합니다.
 - **Paperclip**과 **Kimaki**를 통해 모니터링, 제어(HITL), 오케스트레이션이 이루어집니다.
 
+## 등록된 그래프
+
+`langgraph.json`이 실행 단위다. 각 파일은 `graph`라는 이름으로 컴파일된 그래프를 노출한다.
+
+| 그래프 | 파일 | 하는 일 | 외부 의존 | HITL |
+| --- | --- | --- | --- | --- |
+| `spike_test` | `graphs/spike_test_graph.py` | LangGraph 배선 확인용 최소 그래프 | 없음 | – |
+| `error_triage` | `graphs/error_triage_graph.py` | 센트리 오류 트리아지 | LLM 프록시 | – |
+| `market_intelligence` | `graphs/market_intelligence_graph.py` | 시장 신호 수집·분석 → DB 적재 | LLM 프록시, `requests` | `loader` 직전 |
+| `design_ops` | `graphs/design_ops_graph.py` | ArtCraft 시안 3안 → 선택 | `vectorcraft-cli`, Paperclip | `publish` 직전 |
+| `asset_craft` | `graphs/asset_craft_graph.py` | 브리프 → 렌더 후보 3안 | 크래프트 CLI, `sonagi-assets` | `select` 직전 |
+| `design_token_sync` | `graphs/design_token_sync_graph.py` | 토큰 정본 → 소비처 컴파일 | `sonagi-assets`, MDS | 승인 게이트 |
+| `video_ops` | `graphs/video_ops_graph.py` | EffectCraft 모션 + FilmCraft 컷편집 → CDN | `effectcraft-cli`, `filmcraft-cli` | `export_and_publish` 직전 |
+| `editorial_verification` | `graphs/editorial_verification_graph.py` | 학술·논리·미학·다이어그램 4대 크리틱 → 판정 | LLM 프록시 | `vault_loader` 직전 |
+| `visual_consistency` | `graphs/visual_consistency_graph.py` | 벡터·모션·이미지 3대 크리틱 → 판정 | LLM 프록시 | `vault_loader` 직전 |
+| `copywriting_craft` | `graphs/copywriting_craft_graph.py` | 클리셰 필터 → 오감 주입 → 카피 3안 | LLM 프록시 | `hitl_checkpoint` 직전 |
+| `knowledge_harvester` | `graphs/knowledge_harvester_graph.py` | 공공 오픈 데이터 6곳 → 위키 카탈로그 | 공개 API (키 불필요) | – |
+| `source_verification` | `graphs/source_verification_graph.py` | SearXNG 검색 → LLM 신뢰도 심사 → 볼트 | 로컬 `SearXNG`, LLM 프록시 | `loader` 직전 |
+
+### 그래프를 추가할 때
+
+1. `graphs/<name>_graph.py`에 `graph = builder.compile(...)`를 둔다. 이름은 반드시 `graph`.
+2. `langgraph.json`의 `graphs`에 `"<name>": "./graphs/<name>_graph.py:graph"`를 추가한다.
+3. 사람이 개입해야 하면 `interrupt_before=[...]`를 쓰고, 재개 전에 무엇을 바꿔야 하는지 주석으로 남긴다.
+4. 테스트는 `test_<name>.py`에 두고 LLM·CLI·HTTP를 monkeypatch한다. 루트 `pytest`는 오프라인으로 돈다.
+   실장비가 필요한 검증은 `scripts/verify_<name>.py`로 분리한다.
+
 ## 크래프트 앱 호출 (VectorCraft)
 
 VectorCraft는 바이너리가 **둘**이고 역할이 다르다. 헷갈리면 "왜 안 되지"에서 한 시간을 쓴다.
