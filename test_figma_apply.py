@@ -80,11 +80,13 @@ def test_execute_script_is_deterministic_and_idempotent(tmp_path):
 
 
 def test_snapshot_script_is_read_only(tmp_path):
-    script = ts.figma_snapshot_script("Semantic Colors")
+    """스냅샷은 파일 전체를 id로 담는다(별칭 대상을 찾아야 하므로)."""
+    script = ts.figma_snapshot_script()
 
     assert "createVariable" not in script
     assert "setValueForMode" not in script
-    assert "Semantic Colors" in script
+    assert "sonagi.figma.snapshot/1" in script
+    assert "getLocalVariableCollectionsAsync" in script
 
 
 def test_apply_package_orders_snapshot_write_snapshot(tmp_path):

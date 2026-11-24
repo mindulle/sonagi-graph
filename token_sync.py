@@ -65,6 +65,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import figma_drift
+
 # ---------------------------------------------------------------- 상수 / 경로
 
 DEFAULT_TOKENS_DIR = "/home/ubuntu/mindulle-design-system/packages/tokens"
@@ -1714,11 +1716,18 @@ def figma_execute_script(request: Dict[str, Any]) -> str:
 
 
 def figma_snapshot_script(collection: Optional[str] = None) -> str:
-    """현재 Variables 상태를 읽는 JS. 쓰기 전·후에 같은 스크립트로 스냅샷을 남긴다."""
-    name = collection or figma_collection_name()
+    """현재 Variables 전체를 읽는 JS(읽기 전용). 쓰기 전·후, 그리고 감사에 쓴다.
+
+    **별칭을 id로 보존한다.** 이름으로만 스냅샷을 뜨면 시맨틱 변수가 전부 `"alias"`가
+    되어 값 비교가 불가능하다(2026-11-24 실서비스 감사에서 29건 거짓 드리프트).
+    그래서 컬렉션·모드를 id로 싣고, 별칭은 `{alias: <변수 id>}`로 남긴다.
+    `figma_drift.check_snapshot()`이 이 스냅샷을 해석해 계획과 대조한다.
+
+    `collection`은 호환용 인자다. 스냅샷은 별칭 대상을 찾아야 하므로 항상 파일 전체를
+    담는다(컬렉션 하나만 뜨면 다른 컬렉션을 가리키는 별칭을 해석할 수 없다).
+    """
     return (
         "/* sonagi-graph token_sync.py → Figma Variables 스냅샷 (읽기 전용) */\n"
-        f"const COLLECTION = {json.dumps(name, ensure_ascii=False)};\n"
         "const hex = (value) => {\n"
         "  if (!value || typeof value !== 'object' || !('r' in value)) return null;\n"
         "  const part = (x) => Math.round(x * 255).toString(16).padStart(2, '0');\n"
@@ -1727,21 +1736,25 @@ def figma_snapshot_script(collection: Optional[str] = None) -> str:
         "  return a < 1 ? base + part(a) : base;\n"
         "};\n"
         "const cols = await figma.variables.getLocalVariableCollectionsAsync();\n"
-        "const col = cols.find((c) => c.name === COLLECTION) || null;\n"
-        "if (!col) return { collection: COLLECTION, exists: false, modes: [], variables: [] };\n"
-        "const local = await figma.variables.getLocalVariablesAsync();\n"
-        "const names = Object.fromEntries(col.modes.map((m) => [m.modeId, m.name]));\n"
-        "const variables = local\n"
-        "  .filter((v) => v.variableCollectionId === col.id)\n"
-        "  .map((v) => ({\n"
-        "    name: v.name,\n"
-        "    type: v.resolvedType,\n"
-        "    modes: Object.fromEntries(\n"
-        "      Object.entries(v.valuesByMode).map(([id, value]) => [names[id] || id, hex(value) || { alias: true }])\n"
-        "    ),\n"
-        "  }))\n"
-        "  .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));\n"
-        "return { collection: col.name, exists: true, modes: col.modes.map((m) => m.name), variables };\n"
+        "const all = await figma.variables.getLocalVariablesAsync();\n"
+        "const collections = cols.map((c) => ({\n"
+        "  id: c.id,\n"
+        "  name: c.name,\n"
+        "  modes: c.modes.map((m) => ({ id: m.modeId, name: m.name })),\n"
+        "}));\n"
+        "const variables = all.map((v) => ({\n"
+        "  id: v.id,\n"
+        "  name: v.name,\n"
+        "  collectionId: v.variableCollectionId,\n"
+        "  type: v.resolvedType,\n"
+        "  values: Object.fromEntries(\n"
+        "    Object.entries(v.valuesByMode).map(([modeId, value]) => [\n"
+        "      modeId,\n"
+        "      value && value.type === 'VARIABLE_ALIAS' ? { alias: value.id } : (hex(value) || value),\n"
+        "    ])\n"
+        "  ),\n"
+        "}));\n"
+        "return { schema: 'sonagi.figma.snapshot/1', fileName: figma.root.name, collections, variables };\n"
     )
 
 
@@ -1766,7 +1779,13 @@ def verify_figma_readback(
 
     쓰기 호출이 성공했다는 응답은 증거가 아니다. Variables를 다시 읽어 이름·모드·
     값을 맞춰 봐야 하고, 모드 누락과 동명 변수 충돌도 여기서 드러난다.
+
+    스냅샷이 `sonagi.figma.snapshot/1`(id 기반)이면 별칭을 끝까지 해석해 비교한다.
+    실서비스 파일처럼 시맨틱이 전부 별칭인 경우가 그쪽이다. 이름 기반 v0 스냅샷은
+    예전 경로로 남겨 둔다(평면 hex 컬렉션·단위 테스트).
     """
+    if isinstance(snapshot, dict) and snapshot.get("schema") == figma_drift.SNAPSHOT_SCHEMA:
+        return figma_drift.check_snapshot(snapshot, request)
     expected_modes = list(request["modes"])
     expected_names = [item["name"] for item in request["variables"]]
     if not snapshot.get("exists", True):
