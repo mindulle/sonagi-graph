@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 from langchain_core.runnables import RunnableLambda
 
-from graphs import package_delivery_graph as mod
+from graphs import logo_design_graph as mod
 
 
 def _fake_press_run(out_dir):
@@ -32,7 +32,7 @@ def test_graph_compiles_with_checkpointer():
     pytest.importorskip("langgraph")
     from langgraph.checkpoint.memory import MemorySaver
 
-    g = mod.build_package_delivery_graph(checkpointer=MemorySaver())
+    g = mod.build_logo_design_graph(checkpointer=MemorySaver())
     assert g is not None
 
 
@@ -107,7 +107,7 @@ def test_print_prep_passes_with_full_spec():
 def test_concept_node_generates_directions(monkeypatch):
     """concept_node가 LLM으로 3~5개 방향을 생성한다."""
     from langchain_core.runnables import RunnableLambda
-    from graphs.package_delivery_graph import ConceptOutput, ConceptDirection
+    from graphs.logo_design_graph import ConceptOutput, ConceptDirection
 
     stub = RunnableLambda(lambda _: ConceptOutput(directions=[
         ConceptDirection(title="미니멀 모노그램", description="이니셜 결합", press_concept="monogram", territory_hint="monogram_overlap"),
@@ -125,7 +125,7 @@ def test_concept_node_generates_directions(monkeypatch):
 def test_concept_node_respects_user_concept_override(monkeypatch):
     """사용자가 concept을 직접 지정하면 모든 방향이 그 concept으로 고정된다."""
     from langchain_core.runnables import RunnableLambda
-    from graphs.package_delivery_graph import ConceptOutput, ConceptDirection
+    from graphs.logo_design_graph import ConceptOutput, ConceptDirection
 
     stub = RunnableLambda(lambda _: ConceptOutput(directions=[
         ConceptDirection(title="A", description="d", press_concept="monogram", territory_hint="monogram_overlap"),

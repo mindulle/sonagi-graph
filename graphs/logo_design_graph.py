@@ -32,9 +32,9 @@ critic (규칙 기반 + LLM 점수)
 
 사용::
 
-    from graphs.package_delivery_graph import build_package_delivery_graph
+    from graphs.logo_design_graph import build_logo_design_graph
 
-    graph = build_package_delivery_graph(checkpointer=MemorySaver())
+    graph = build_logo_design_graph(checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": "logo-1"}}
     graph.invoke({
         "brief": "민들레 스튜디오 로고 — 차분하고 고급스러운 인쇄물",
@@ -474,7 +474,7 @@ def route_after_hitl(state: PackageDeliveryState):
     return "publish" if state.get("approval_status") == "approved" else END
 
 
-def build_package_delivery_graph(checkpointer=None):
+def build_logo_design_graph(checkpointer=None):
     builder = StateGraph(PackageDeliveryState)
 
     builder.add_node("concept", concept_node)
@@ -511,5 +511,5 @@ def build_package_delivery_graph(checkpointer=None):
     return builder.compile(checkpointer=checkpointer, interrupt_before=["hitl"])
 
 
-graph = build_package_delivery_graph()
+graph = build_logo_design_graph()
 
