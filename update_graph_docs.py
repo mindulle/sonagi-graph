@@ -76,5 +76,4 @@ def generate_docs():
 
 if __name__ == "__main__":
     generate_docs()
-EOF
-python3 -m py_compile update_graph_docs.py && echo "syntax ok"
+
