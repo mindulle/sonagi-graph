@@ -97,3 +97,125 @@ def test_print_prep_passes_with_full_spec():
     }
     result = mod.print_prep_node(state)
     assert result["print_ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# 신규 노드: concept, context_test, refine, iteration
+# ---------------------------------------------------------------------------
+
+
+def test_concept_node_generates_directions(monkeypatch):
+    """concept_node가 LLM으로 3~5개 방향을 생성한다."""
+    from langchain_core.runnables import RunnableLambda
+    from graphs.package_delivery_graph import ConceptOutput, ConceptDirection
+
+    stub = RunnableLambda(lambda _: ConceptOutput(directions=[
+        ConceptDirection(title="미니멀 모노그램", description="이니셜 결합", press_concept="monogram", territory_hint="monogram_overlap"),
+        ConceptDirection(title="네거티브 스페이스", description="여백 활용", press_concept="negative_space", territory_hint="negative_hidden"),
+        ConceptDirection(title="압인", description="전통 활자", press_concept="press_imprint", territory_hint="seal_frame"),
+    ]))
+    monkeypatch.setattr(mod, "chat_model", lambda *a, **k: type("L", (), {"with_structured_output": lambda self, s: stub})())
+
+    result = mod.concept_node({"brief": "민들레 스튜디오"})
+    assert len(result["concepts"]) == 3
+    assert result["status"] == "concepted"
+    assert result["concepts"][0]["press_concept"] == "monogram"
+
+
+def test_concept_node_respects_user_concept_override(monkeypatch):
+    """사용자가 concept을 직접 지정하면 모든 방향이 그 concept으로 고정된다."""
+    from langchain_core.runnables import RunnableLambda
+    from graphs.package_delivery_graph import ConceptOutput, ConceptDirection
+
+    stub = RunnableLambda(lambda _: ConceptOutput(directions=[
+        ConceptDirection(title="A", description="d", press_concept="monogram", territory_hint="monogram_overlap"),
+    ]))
+    monkeypatch.setattr(mod, "chat_model", lambda *a, **k: type("L", (), {"with_structured_output": lambda self, s: stub})())
+
+    result = mod.concept_node({"brief": "x", "concept": "mascot"})
+    assert result["concepts"][0]["press_concept"] == "mascot"
+
+
+def test_context_test_skips_when_no_mark():
+    result = mod.context_test_node({"mark_svg": None})
+    assert result["context_test_score"] == 100
+    assert result["status"] == "context_skipped"
+
+
+def test_context_test_renders_multiple_sizes(monkeypatch, tmp_path):
+    """context_test_node가 여러 크기로 렌더링한다."""
+    import subprocess
+    from pathlib import Path
+
+    def fake_run(cmd, capture_output=True, text=True, timeout=None, env=None, **kw):
+        # vectorcraft-cli convert ... --out PATH --scale S
+        out = cmd[cmd.index("--scale") - 1] if "--scale" in cmd else None
+        # find --out
+        if "--out" in cmd:
+            out = cmd[cmd.index("--out") + 1]
+        if out:
+            Path(out).parent.mkdir(parents=True, exist_ok=True)
+            Path(out).write_bytes(b"\x00" * 200)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(mod, "VECTORCRAFT", "vectorcraft-cli")
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    svg = '<svg viewBox="0 0 120 120" width="120" height="120"><circle cx="60" cy="60" r="40" fill="#161616"/></svg>'
+    result = mod.context_test_node({"mark_svg": svg})
+    assert result["status"] == "context_tested"
+    assert result["context_test_score"] >= 0
+    assert "sizes" in result["context_test_report"]
+
+
+def test_critic_combines_context_and_craft():
+    state = {"context_test_score": 85, "status": "crafted"}
+    result = mod.critic_node(state)
+    assert result["context_test_score"] == 85
+    assert result["status"] == "critiqued"
+
+    # craft 실패 시 20점 감점
+    state2 = {"context_test_score": 85, "status": "craft_failed"}
+    result2 = mod.critic_node(state2)
+    assert result2["context_test_score"] == 65
+
+
+def test_route_after_context_loops_on_low_score():
+    # 점수 70 미만 + iteration 0 < max 2 → refine
+    assert mod.route_after_context({"context_test_score": 50, "iteration_count": 0, "max_iterations": 2}) == "refine"
+    # 점수 70 이상 → print_prep
+    assert mod.route_after_context({"context_test_score": 80, "iteration_count": 0, "max_iterations": 2}) == "print_prep"
+    # iteration 초과 → 강제 진행
+    assert mod.route_after_context({"context_test_score": 50, "iteration_count": 2, "max_iterations": 2}) == "print_prep"
+
+
+def test_refine_increments_iteration(monkeypatch):
+    from langchain_core.runnables import RunnableLambda
+
+    stub = RunnableLambda(lambda _: type("R", (), {"content": '{"brief": "보강된 브리프", "concept": "monogram"}'})())
+    monkeypatch.setattr(mod, "chat_model", lambda *a, **k: type("L", (), {"with_structured_output": lambda self, s: stub})() if False else type("L", (), {})())
+    # chat_model returns an object with .with_structured_output or direct invoke
+    # refine uses prompt | llm (no structured output), so llm needs .invoke
+    from langchain_core.runnables import RunnableLambda
+
+    def fake_invoke(msgs):
+        return type("R", (), {"content": '{"brief": "보강된 브리프", "concept": "monogram"}'})()
+    monkeypatch.setattr(mod, "chat_model", lambda *a, **k: RunnableLambda(lambda msgs: fake_invoke(msgs)))
+
+    result = mod.refine_node({"brief": "원래 브리프", "context_test_report": {"issues": ["16px에서 안 보임"]}, "iteration_count": 0})
+    assert result["brief"] == "보강된 브리프"
+    assert result["concept"] == "monogram"
+    assert result["iteration_count"] == 1
+    assert result["status"] == "refined"
+
+
+def test_refine_fallback_on_llm_failure(monkeypatch):
+    class BadLLM:
+        def invoke(self, msgs):
+            raise RuntimeError("LLM down")
+    monkeypatch.setattr(mod, "chat_model", lambda *a, **k: BadLLM())
+
+    result = mod.refine_node({"brief": "원래", "context_test_report": {"issues": ["fail"]}, "iteration_count": 1})
+    assert "원래" in result["brief"]
+    assert result["iteration_count"] == 2
+    assert result["status"] == "refined"
