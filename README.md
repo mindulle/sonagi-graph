@@ -92,11 +92,11 @@ python3 -m pytest test_figma_apply.py -q    # Figma 쓰기 요청·재읽기 대
 | `token-report.json`   | 해시·검사·경고·승인 기록                                             |
 
 **정본은 고치지 않는다.** 검사에서 나온 결함은 리포트 경고로만 남기고 MDS에서
-고친다. 2026-11-24 MDS-71 수정 후 실행 기준 **경고 2건, 치명 0건**:
+고친다. 2026-11-24 MDS-71 수정 + 검사 계약 정리 후 실행 기준 **경고 0건, 치명 0건**:
 
 ```
 before  {"leaves": 301, "resolved": 290, "unresolved": 11, "errors": 0, "warnings": 18}
-after   {"leaves": 301, "resolved": 301, "unresolved": 0,  "errors": 0, "warnings": 2}
+after   {"leaves": 301, "resolved": 301, "unresolved": 0,  "errors": 0, "warnings": 0}
 ```
 
 해소된 경고(MDS-71, `@mindulle/tokens`):
@@ -109,14 +109,17 @@ after   {"leaves": 301, "resolved": 301, "unresolved": 0,  "errors": 0, "warning
 - `projection_drift` 1 → 0 — `editorial.accent-ink`를 정본 `text.inverse`(#ffffff)에
   맞췄다(sonagi-assets).
 
-남은 경고 2건은 **정본 계약상 의도된 상태**다. 재실측 때 결함으로 오인하지 말 것:
+해소된 경고(검사 계약 정리, sonagi-graph):
 
-- `radius_layer_missing` — radius의 3단계 **값** 계약(4/6/8px)은
-  `VISUAL_IDENTITY_CHARTER` Pillar 2와 sonagi-assets `RADIUS`가 정하고, 정본은
-  primitive `borderRadius.sm/base/md`가 그 값을 갖는다. radius는 Light/Dark 분기가
-  없어 semantic 레이어를 두지 않는다(ADR 0010 2-Tier). `semantic.radius.*`를 넣으면
-  `--mds-radius-*` 이름이 primitive와 중복되고, 계층 정리는 ADR 0010이 major로 미뤘다.
-- `space_half_step` — `spacing.1/3/5`(4·12·20px)는 의도된 4px 하프스텝이다.
+- `radius_layer_missing` → 검사 지점 이동. radius는 Light/Dark 분기가 없어 semantic
+  레이어가 할 일이 없다(ADR 0010 2-Tier). 레이어 유무 대신 **primitive `sm/base/md`의
+  값 계약(4/6/8px)** 을 본다 — 계층이 아니라 값이 계약이므로, 8px을 80px로 친 오타를
+  잡는 것이 목적이다. `radius_contract_violation`(error) · `radius_contract_missing`
+  (warning). `semantic.radius.*`를 만들면 `--mds-radius-*`가 primitive와 이름이
+  겹치므로, 테마별 radius 요구가 생길 때 ADR 0010과 함께 연다.
+- `space_half_step` → 허용. `spacing.1/3/5`(4·12·20px)는 CHARTER Pillar 2의 4px
+  하프스텝이고, 4px 배수면 통과시킨다. `space_grid_violation`(6·10px 등)은 계속
+  error다. 하프스텝 목록은 `detail.scales.space_grid.half_step_tokens`에 정보로 남는다.
 
 검사 규칙과 심각도는 `token_sync.py` docstring의 표에 있다. 같은 입력이면 같은
 바이트가 나오고(생성 시각·UUID 없음), `artifactSetHash`가 그 지문이다.

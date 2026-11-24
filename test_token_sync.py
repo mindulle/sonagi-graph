@@ -55,7 +55,9 @@ def primitives(**overrides):
         },
         "borderRadius": {
             "none": {"$value": "0px", "$type": "dimension"},
+            "sm": {"$value": "4px", "$type": "dimension"},
             "base": {"$value": "6px", "$type": "dimension"},
+            "md": {"$value": "8px", "$type": "dimension"},
             "full": {"$value": "9999px", "$type": "dimension"},
         },
     }
@@ -276,12 +278,13 @@ def test_space_grid_violation_is_error(tmp_path):
     ]
 
 
-def test_space_half_step_is_aggregate_warning(tmp_path):
+def test_space_half_step_is_allowed_without_warning(tmp_path):
+    """4px 하프스텝은 계약이다(CHARTER Pillar 2). 경고로 남기지 않는다."""
     root = fixture_root(tmp_path)
     analysis, detail = ts.analyze(root, tmp_path / "nope.json")
 
-    half = next(f for f in analysis.findings if f.code == "space_half_step")
-    assert half.severity == "warning"
+    assert "space_half_step" not in codes(analysis)
+    assert "space_grid_violation" not in codes(analysis)
     assert detail["scales"]["space_grid"]["half_step_tokens"] == ["spacing.1"]
 
 
@@ -314,13 +317,46 @@ def test_six_step_scale_passes(tmp_path):
     assert detail["scales"]["type_scale"]["heading_steps"] == 6
 
 
-def test_radius_layer_missing_warns(tmp_path):
+def test_radius_contract_passes_without_semantic_layer(tmp_path):
+    """radius는 2-Tier다. semantic 레이어가 없어도 값 계약이 맞으면 통과."""
     root = fixture_root(tmp_path)
     analysis, detail = ts.analyze(root, tmp_path / "nope.json")
 
-    finding = next(f for f in analysis.findings if f.code == "radius_layer_missing")
+    assert "radius_contract_violation" not in codes(analysis)
+    assert "radius_contract_missing" not in codes(analysis)
+    assert detail["scales"]["radius"]["contract"]["md"]["px"] == 8.0
+
+
+def test_radius_value_contract_violation_is_error(tmp_path):
+    """8px을 80px로 친 오타를 잡는다. 이게 계층 검사 대신 남긴 검사다."""
+    doc = primitives()
+    doc["borderRadius"]["md"] = {"$value": "80px", "$type": "dimension"}
+    root = fixture_root(tmp_path, **{"primitives.json": doc})
+    analysis, _ = ts.analyze(root, tmp_path / "nope.json")
+
+    finding = next(f for f in analysis.findings if f.code == "radius_contract_violation")
+    assert finding.severity == "error"
+    assert finding.path == "borderRadius.md"
+    assert finding.detail == {"expected_px": 8.0, "px": 80.0}
+
+
+def test_radius_contract_missing_step_warns(tmp_path):
+    doc = primitives()
+    del doc["borderRadius"]["sm"]
+    root = fixture_root(tmp_path, **{"primitives.json": doc})
+    analysis, _ = ts.analyze(root, tmp_path / "nope.json")
+
+    finding = next(f for f in analysis.findings if f.code == "radius_contract_missing")
     assert finding.severity == "warning"
-    assert len(detail["scales"]["radius"]["primitive_steps"]) == 3
+    assert finding.path == "borderRadius.sm"
+
+
+def test_radius_semantic_layer_is_not_required(tmp_path):
+    """semantic radius가 없어도 경고가 없어야 한다(2-Tier, ADR 0010)."""
+    root = fixture_root(tmp_path)
+    analysis, _ = ts.analyze(root, tmp_path / "nope.json")
+
+    assert "radius_layer_missing" not in codes(analysis)
 
 
 # ---------------------------------------------------------------- 투영 대조
