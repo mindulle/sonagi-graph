@@ -732,6 +732,8 @@ def refine_node(state: PackageDeliveryState) -> Dict[str, Any]:
     prompt = ChatPromptTemplate.from_messages([
         ("system",
          "당신은 로고 디자이너입니다. 다음 문제점을 해결하도록 브리프를 보강하세요.\n"
+         "16px 파비콘에서 읽히지 않으면: 형태를 단순화하고, 세부를 제거하고, 스트로크를 두껍게 하세요.\n"
+         "대비가 부족하면: 색상을 더 어둡게/밝게 바꾸거나, 아웃라인을 추가하세요.\n"
          "원래 브리프에 구체적인 개선 지시를 추가하세요. JSON으로만 응답하세요."),
         ("user",
          "원래 브리프: {brief}\n"
@@ -741,7 +743,6 @@ def refine_node(state: PackageDeliveryState) -> Dict[str, Any]:
     ])
 
     try:
-        from langchain_core.output_parsers import StrOutputParser
         import json as _json
         chain = prompt | llm
         resp = chain.invoke({"brief": current_brief, "issues": "; ".join(issues), "iteration": iteration})
@@ -749,12 +750,30 @@ def refine_node(state: PackageDeliveryState) -> Dict[str, Any]:
         new_brief = parsed.get("brief", current_brief)
         new_concept = parsed.get("concept", state.get("concept"))
     except Exception:
-        new_brief = current_brief + " (단순화, 가독성 향상)"
-        new_concept = state.get("concept")
+        # LLM 실패 시 규칙 기반 보강
+        issue_text = "; ".join(issues).lower()
+        if iteration == 0:
+            # 1회차: 같은 concept에서 단순화
+            new_brief = current_brief + " (형태 단순화, 대비 강화, 16px 가독성 우선, 겹침 최소화)"
+            new_concept = state.get("concept")
+        else:
+            # 2회차: concept을 전환 (16px 가독성이 높은 방향으로)
+            # lettermark → monogram → negative_space → mascot 순으로 단순화
+            concepts = ["lettermark", "monogram", "negative_space", "mascot", "press_imprint", "seed_dispersal", "ink_overlap"]
+            current = state.get("concept") or state.get("selected_concept") or "press_imprint"
+            idx = concepts.index(current) if current in concepts else 0
+            new_concept = concepts[(idx + 1) % len(concepts)]
+            new_brief = current_brief + f" (concept 전환: {current} → {new_concept}, 16px 가독성 우선)"
+
+    # concept이 바뀌면 selected_concept도 바꾼다
+    if new_concept and new_concept != state.get("concept"):
+        # state에 반영 (refine_node의 반환값에 포함)
+        pass
 
     return {
         "brief": new_brief,
         "concept": new_concept,
+        "selected_concept": new_concept,
         "iteration_count": iteration + 1,
         "refine_feedback": "; ".join(issues),
         "status": "refined",
