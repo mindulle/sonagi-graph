@@ -1,0 +1,35 @@
+# LangGraph 배포용 compose 오버레이.
+#
+# `langgraph up -p 8123 --recreate -d docker-compose.deploy.yml`로 띄운다.
+# `langgraph up`이 생성하는 compose에 이 파일이 먼저 병합되므로, 여기서는
+# 호스트 자원 마운트와 그래프별 환경 변수만 추가한다.
+#
+# 컨테이너는 이 호스트의 다음 자원을 쓴다:
+#   - llm-wiki            검증 리포트·지식 카탈로그 저장
+#   - sonagi-assets       브랜드 토큰·에셋 카탈로그 (brand.py)
+#   - MDS tokens          design_token_sync 정본
+#   - craft CLIs          video_ops / design_ops / asset_craft
+#   - /var/www/craft-suite  video_ops CDN 배포
+#   - SearXNG (:8080)     source_verification
+
+services:
+  langgraph-api:
+    volumes:
+      - /home/ubuntu/llm-wiki:/home/ubuntu/llm-wiki
+      - /home/ubuntu/sonagi-assets:/home/ubuntu/sonagi-assets
+      - /home/ubuntu/mindulle-design-system/packages/tokens:/home/ubuntu/mindulle-design-system/packages/tokens:ro
+      - /var/www/craft-suite:/var/www/craft-suite
+      - /usr/local/bin/filmcraft-cli:/usr/local/bin/filmcraft-cli:ro
+      - /usr/local/bin/effectcraft-cli:/usr/local/bin/effectcraft-cli:ro
+      - /usr/local/bin/vectorcraft-cli:/usr/local/bin/vectorcraft-cli:ro
+      - /tmp/video_ops:/tmp/video_ops
+    environment:
+      # 호스트 서비스는 0.0.0.0에 바인딩되어 있다. Docker 브릿지 IP로 접근한다.
+      OPENAI_API_BASE: http://172.19.0.1:38107/v1
+      SEARXNG_URL: http://172.19.0.1:8080
+      SONAGI_ASSETS_DIR: /home/ubuntu/sonagi-assets
+      SONAGI_WIKI_DIR: /home/ubuntu/llm-wiki
+      SONAGI_CDN_VIDEO_DIR: /var/www/craft-suite/video/exports
+      MDS_TOKENS_DIR: /home/ubuntu/mindulle-design-system/packages/tokens
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
