@@ -13,7 +13,8 @@
     "video_ops": "./graphs/video_ops_graph.py:graph",
     "editorial_verification": "./graphs/editorial_verification_graph.py:graph",
     "visual_consistency": "./graphs/visual_consistency_graph.py:graph",
-    "copywriting_craft": "./graphs/copywriting_craft_graph.py:graph"
+    "copywriting_craft": "./graphs/copywriting_craft_graph.py:graph",
+    "knowledge_harvester": "./graphs/knowledge_harvester_graph.py:graph"
   },
   "python_version": "3.11"
 }
