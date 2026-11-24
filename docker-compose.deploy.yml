@@ -18,6 +18,7 @@ services:
       - /home/ubuntu/llm-wiki:/home/ubuntu/llm-wiki
       - /home/ubuntu/sonagi-assets:/home/ubuntu/sonagi-assets
       - /home/ubuntu/sonagi-work:/home/ubuntu/sonagi-work:ro
+      - /usr/share/fonts:/usr/share/fonts:ro
       - /home/ubuntu/mindulle-design-system/packages/tokens:/home/ubuntu/mindulle-design-system/packages/tokens:ro
       - /var/www/craft-suite:/var/www/craft-suite
       - /usr/local/bin/filmcraft-cli:/usr/local/bin/filmcraft-cli:ro
