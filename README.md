@@ -3,11 +3,13 @@
 Sonagi 생태계의 다양한 에이전틱 그래프(Agentic Graphs)를 정의하고 관리하는 독립 저장소입니다.
 
 ## 아키텍처 개요
+
 - **LangGraph** 기반의 Python 코드로 워크플로우를 설계합니다.
 - `llmops-instance` 서버에 배포되어 백그라운드 워커로 작동합니다.
 - **Paperclip**과 **Kimaki**를 통해 모니터링, 제어(HITL), 오케스트레이션이 이루어집니다.
 
 ## 시작하기
+
 ```bash
 pip install langgraph-cli
 langgraph up --wait --debugger-port 3000
@@ -17,11 +19,11 @@ langgraph up --wait --debugger-port 3000
 
 그래프는 팔레트를 직접 들고 있지 않는다. 색은 `sonagi-assets`의 SSOT에서 읽는다.
 
-| SSOT | 내용 |
-| --- | --- |
-| `tokens/semantic.json` | 팔레트(editorial·architecture) |
-| `registry/index.json` | `tokens_version`·`ruleset_version`·스타일 수 |
-| `registry/styles.json` | 스타일 `id`·축 조합 |
+| SSOT                   | 내용                                         |
+| ---------------------- | -------------------------------------------- |
+| `tokens/semantic.json` | 팔레트(editorial·architecture)               |
+| `registry/index.json`  | `tokens_version`·`ruleset_version`·스타일 수 |
+| `registry/styles.json` | 스타일 `id`·축 조합                          |
 
 ```bash
 export SONAGI_ASSETS_DIR=/home/ubuntu/sonagi-assets   # 기본값
@@ -78,25 +80,41 @@ python3 token_sync.py                       # 검사 + 산출물 → reports/des
 python3 -m pytest test_token_sync.py -q     # 해석·검사·결정론·그래프
 ```
 
-| 산출물 | 소비처 |
-| --- | --- |
-| `mds-tokens.css` | 웹 — `--mds-*` 변수, Light/Dark 블록 |
-| `tailwind.tokens.cjs` | Tailwind — 색·간격·타이포 |
+| 산출물                | 소비처                                                               |
+| --------------------- | -------------------------------------------------------------------- |
+| `mds-tokens.css`      | 웹 — `--mds-*` 변수, Light/Dark 블록                                 |
+| `tailwind.tokens.cjs` | Tailwind — 색·간격·타이포                                            |
 | `craft-swatches.json` | VectorCraft·DesignCraft·PhotoCraft·EffectCraft·FilmCraft 공용 팔레트 |
-| `craft-swatches.svg` | 사람 검수용 스와치 시트 |
-| `figma-variables.js` | Figma 콘솔 — `DRY_RUN = true` 기본, Variables 배치 |
-| `token-report.json` | 해시·검사·경고·승인 기록 |
+| `craft-swatches.svg`  | 사람 검수용 스와치 시트                                              |
+| `figma-variables.js`  | Figma 콘솔 — `DRY_RUN = true` 기본, Variables 배치                   |
+| `token-report.json`   | 해시·검사·경고·승인 기록                                             |
 
 **정본은 고치지 않는다.** 검사에서 나온 결함은 리포트 경고로만 남기고 MDS에서
-고친다. 2026-11-24 실행 기준 경고 18건, 치명 0건:
+고친다. 2026-11-24 MDS-71 수정 후 실행 기준 **경고 2건, 치명 0건**:
 
-- `dangling_alias` 11건 — `semantics.json`의 합성 타이포가 `{font.sans}`를 쓴다.
-  `{typography.fontFamily.sans}`여야 한다. 해석 실패한 잎은 산출물에서 뺀다
+```
+before  {"leaves": 301, "resolved": 290, "unresolved": 11, "errors": 0, "warnings": 18}
+after   {"leaves": 301, "resolved": 301, "unresolved": 0,  "errors": 0, "warnings": 2}
+```
+
+해소된 경고(MDS-71, `@mindulle/tokens`):
+
+- `dangling_alias` 11 → 0 — 합성 타이포가 `{font.sans}` 대신
+  `{typography.fontFamily.*}`를 쓴다. 해석 실패한 잎은 산출물에서 뺀다
   (없는 변수를 가리키는 CSS를 만들지 않는다).
-- `non_dtcg_value` 4건 — `state.error`가 `var(--mds-…)` 리터럴이다.
-- `projection_drift` 1건 — `editorial.accent-ink`가 `#fbfbfa`인데 정본은 `#ffffff`.
-- `radius_layer_missing` — radius 3단계 계약에 semantic 레이어가 없다(primitive 8단계만).
-- `space_half_step` — `spacing.1/3/5`(4·12·20px)가 8px 배수가 아닌 하프스텝.
+- `non_dtcg_value` 4 → 0 — `state.error[-bg]`가 `var(--mds-…)` 대신
+  `{semantic.<mode>.color.state.danger[-bg]}`를 쓴다.
+- `projection_drift` 1 → 0 — `editorial.accent-ink`를 정본 `text.inverse`(#ffffff)에
+  맞췄다(sonagi-assets).
+
+남은 경고 2건은 **정본 계약상 의도된 상태**다. 재실측 때 결함으로 오인하지 말 것:
+
+- `radius_layer_missing` — radius의 3단계 **값** 계약(4/6/8px)은
+  `VISUAL_IDENTITY_CHARTER` Pillar 2와 sonagi-assets `RADIUS`가 정하고, 정본은
+  primitive `borderRadius.sm/base/md`가 그 값을 갖는다. radius는 Light/Dark 분기가
+  없어 semantic 레이어를 두지 않는다(ADR 0010 2-Tier). `semantic.radius.*`를 넣으면
+  `--mds-radius-*` 이름이 primitive와 중복되고, 계층 정리는 ADR 0010이 major로 미뤘다.
+- `space_half_step` — `spacing.1/3/5`(4·12·20px)는 의도된 4px 하프스텝이다.
 
 검사 규칙과 심각도는 `token_sync.py` docstring의 표에 있다. 같은 입력이면 같은
 바이트가 나오고(생성 시각·UUID 없음), `artifactSetHash`가 그 지문이다.
@@ -131,12 +149,12 @@ graph.update_state(config, {"selection": "minimal-desktop-light"})
 graph.invoke(None, config)
 ```
 
-| 환경변수 | 기본 | 뜻 |
-| --- | --- | --- |
-| `SONAGI_ASSETS_DIR` | `/home/ubuntu/sonagi-assets` | 렌더러·린터·명부가 있는 곳 |
-| `SONAGI_CATALOG` | `<assets>/test_data/golden/catalog.json` | 자산 카탈로그 |
-| `SONAGI_CRAFT_OUT` | `/tmp/asset_craft` | 변주 출력 루트 |
-| `SONAGI_CRAFT_REFS` | `8` | 스카우트가 고를 참고 자산 수 |
+| 환경변수            | 기본                                     | 뜻                           |
+| ------------------- | ---------------------------------------- | ---------------------------- |
+| `SONAGI_ASSETS_DIR` | `/home/ubuntu/sonagi-assets`             | 렌더러·린터·명부가 있는 곳   |
+| `SONAGI_CATALOG`    | `<assets>/test_data/golden/catalog.json` | 자산 카탈로그                |
+| `SONAGI_CRAFT_OUT`  | `/tmp/asset_craft`                       | 변주 출력 루트               |
+| `SONAGI_CRAFT_REFS` | `8`                                      | 스카우트가 고를 참고 자산 수 |
 
 판단 로직은 `craft.py`에 있고 LangGraph에 의존하지 않는다(`test_craft.py`).
 
