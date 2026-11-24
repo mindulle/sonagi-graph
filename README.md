@@ -26,6 +26,7 @@ Sonagi 생태계의 다양한 에이전틱 그래프(Agentic Graphs)를 정의�
 | `copywriting_craft` | `graphs/copywriting_craft_graph.py` | 클리셰 필터 → 오감 주입 → 카피 3안 | LLM 프록시 | `hitl_checkpoint` 직전 |
 | `knowledge_harvester` | `graphs/knowledge_harvester_graph.py` | 공공 오픈 데이터 6곳 → 위키 카탈로그 | 공개 API (키 불필요) | – |
 | `source_verification` | `graphs/source_verification_graph.py` | SearXNG 검색 → LLM 신뢰도 심사 → 볼트 | 로컬 `SearXNG`, LLM 프록시 | `loader` 직전 |
+| `package_delivery` | `graphs/package_delivery_graph.py` | Press 마크(결정론) → asset craft(레이아웃) → 인쇄 준비 → HITL | `sonagi-work/press`, `sonagi-assets` | `hitl` 직전 |
 
 ### 서버에서 실행하고 Kimaki로 승인하기
 
