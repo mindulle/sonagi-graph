@@ -9,7 +9,8 @@
     "market_intelligence": "./graphs/market_intelligence_graph.py:graph",
     "design_ops": "./graphs/design_ops_graph.py:graph",
     "asset_craft": "./graphs/asset_craft_graph.py:graph",
-    "design_token_sync": "./graphs/design_token_sync_graph.py:graph"
+    "design_token_sync": "./graphs/design_token_sync_graph.py:graph",
+    "video_ops": "./graphs/video_ops_graph.py:graph"
   },
   "python_version": "3.11"
 }
