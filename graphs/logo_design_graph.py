@@ -86,6 +86,9 @@ class ConceptOutput(BaseModel):
 
 class PackageDeliveryState(TypedDict, total=False):
     brief: str
+    research_summary: Optional[str]
+    skip_research: bool
+    recommended_concept: Optional[str]
     concept: Optional[str]  # press concept (직접 지정 시)
     concepts: List[Dict[str, Any]]  # LLM 생성 방향 목록
     selected_concept: Optional[str]  # 선택된 방향의 press_concept
@@ -170,6 +173,9 @@ def concept_node(state: PackageDeliveryState) -> Dict[str, Any]:
     인간 디자이너의 '스케치' 단계에 해당한다. 각 방향은 press concept에 매핑된다.
     """
     brief = state.get("brief", "")
+    research = state.get("research_summary", "")
+    if research:
+        brief = f"{brief}\n\n[레퍼런스 분석]\n{research}"
     llm = chat_model("LOGO_CONCEPT_LLM_MODEL", default_model="gemini-3-flash", temperature=0.4)
     structured = llm.with_structured_output(ConceptOutput)
 
@@ -195,9 +201,10 @@ def concept_node(state: PackageDeliveryState) -> Dict[str, Any]:
         directions = [{"title": "기본 방향", "description": "브리프 기반", "press_concept": "press_imprint", "territory_hint": "seal_frame"}]
 
     # 사용자가 concept을 직접 지정했으면それを 우선
-    if state.get("concept"):
+    override = state.get("concept") or state.get("recommended_concept")
+    if override:
         for d in directions:
-            d["press_concept"] = state["concept"]
+            d["press_concept"] = override
 
     # territory 검증: 존재하지 않는 territory는 가장 가까운 것으로 보정
     valid_territories = set()
@@ -224,13 +231,100 @@ def concept_node(state: PackageDeliveryState) -> Dict[str, Any]:
     return {"concepts": directions, "status": "concepted"}
 
 
+
+def research_node(state: PackageDeliveryState) -> Dict[str, Any]:
+    """레퍼런스를 수집하고 분석하여 concept 방향을 잡는다.
+
+    인간 디자이너의 'research' 단계에 해당한다.
+    1. source_verification으로 브리프 관련 로고/디자인 검색
+    2. knowledge_harvester로 공공 아카이브에서 레퍼런스 수집
+    3. LLM으로 "이 레퍼런스들의 공통 형태 원리는 무엇인가" 분석
+    4. 분석 결과를 concept 노드의 컨텍스트로 전달
+    """
+    brief = state.get("brief", "")
+    mark_source = state.get("mark_source", "none")
+
+    # mark_source="none"이거나 skip_research=True면 research 건너뜀
+    if mark_source == "none" or state.get("skip_research"):
+        return {"research_summary": "research 건너뜀", "status": "research_skipped"}
+
+    # 1. source_verification 호출 (SearXNG + LLM 신뢰도 심사)
+    search_query = f"{brief} logo design brand identity"
+    sv_summary = ""
+    try:
+        from graphs.source_verification_graph import build_source_verification_graph
+        from langgraph.checkpoint.memory import MemorySaver
+        sv_graph = build_source_verification_graph(checkpointer=MemorySaver())
+        sv_result = sv_graph.invoke(
+            {"status": "init"},
+            config={"configurable": {"thread_id": f"sv-{uuid.uuid4().hex[:6]}"}},
+        )
+        verified = sv_result.get("verified_sources", [])
+        if verified:
+            titles = [v.get("source_data", {}).get("title", "") for v in verified[:5]]
+            sv_summary = "신뢰도 높은 소스: " + ", ".join(t for t in titles if t)
+    except Exception as e:
+        sv_summary = f"source_verification 실패: {str(e)[:100]}"
+
+    # 2. knowledge_harvester 호출 (공공 아카이브에서 레퍼런스 수집)
+    kh_summary = ""
+    try:
+        from graphs.knowledge_harvester_graph import build_knowledge_harvester_graph
+        from langgraph.checkpoint.memory import MemorySaver
+        kh_graph = build_knowledge_harvester_graph(checkpointer=MemorySaver())
+        kh_result = kh_graph.invoke(
+            {"query": brief, "category": "design"},
+            config={"configurable": {"thread_id": f"kh-{uuid.uuid4().hex[:6]}"}},
+        )
+        met = kh_result.get("met_museum_results", [])
+        if met:
+            kh_summary = f"The Met CC0 예술 도판 {len(met)}건 수집. 예: {met[0].get('title', '')}"
+    except Exception as e:
+        kh_summary = f"knowledge_harvester 실패: {str(e)[:100]}"
+
+    # 3. LLM으로 레퍼런스 분석
+    llm = chat_model("LOGO_RESEARCH_LLM_MODEL", default_model="gemini-3-flash", temperature=0.3)
+    prompt = ChatPromptTemplate.from_messages([
+        ("system",
+         "당신은 로고 디자인 연구원입니다. 수집된 레퍼런스를 분석하여 다음을 답하세요:\n"
+         "1. 이 브리프와 관련된 시각적 형태 가족은 무엇인가? (monogram, negative_space, mascot, seal_frame, type_block 등)\n"
+         "2. 경쟁사/레퍼런스에서 공통으로 보이는 형태 원리는 무엇인가?\n"
+         "3. 이 브리프에 추천하는 press concept은 무엇인가? (seed_dispersal, press_imprint, ink_overlap, monogram, negative_space, mascot 중 하나)\n"
+         "간결하게 3~5문장으로 답하세요."),
+        ("user",
+         "브리프: {brief}\n"
+         "검색 결과: {sv_summary}\n"
+         "아카이브 결과: {kh_summary}"),
+    ])
+
+    try:
+        resp = (prompt | llm).invoke({"brief": brief, "sv_summary": sv_summary, "kh_summary": kh_summary})
+        analysis = resp.content
+    except Exception as e:
+        analysis = f"분석 실패: {str(e)[:100]}"
+
+    # 추천 concept 추출 (간단한 키워드 매칭)
+    recommended_concept = None
+    for c in ["monogram", "negative_space", "mascot", "seed_dispersal", "press_imprint", "ink_overlap"]:
+        if c in analysis.lower() or c in brief.lower():
+            recommended_concept = c
+            break
+
+    return {
+        "research_summary": analysis,
+        "recommended_concept": recommended_concept,
+        "status": "researched",
+    }
+
+
+
 def press_mark_node(state: PackageDeliveryState) -> Dict[str, Any]:
     """press로 마크 후보를 생성하고, top 1을 '잠금'한다."""
     if state.get("mark_source", "none") != "generate":
         return {"status": "mark_skipped"}
 
     brief_text = state.get("brief", "Sonagi")
-    concept = state.get("selected_concept") or state.get("concept") or "press_imprint"
+    concept = state.get("selected_concept") or state.get("concept") or state.get("recommended_concept") or "press_imprint"
     out_dir = OUT_ROOT / f"press_{uuid.uuid4().hex[:6]}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -540,7 +634,9 @@ def build_logo_design_graph(checkpointer=None, interrupt_before=None):
     builder.add_node("publish", publish_node)
 
     # concept → mark routing → craft → context_test → critic → (loop or proceed)
-    builder.add_edge(START, "concept")
+    builder.add_edge(START, "research")
+    builder.add_node("research", research_node)
+    builder.add_edge("research", "concept")
     builder.add_conditional_edges("concept", route_mark, {
         "press_mark": "press_mark",
         "load_mark": "load_mark",
