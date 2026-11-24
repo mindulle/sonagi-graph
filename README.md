@@ -27,6 +27,7 @@ Sonagi 생태계의 다양한 에이전틱 그래프(Agentic Graphs)를 정의�
 | `knowledge_harvester` | `graphs/knowledge_harvester_graph.py` | 공공 오픈 데이터 6곳 → 위키 카탈로그 | 공개 API (키 불필요) | – |
 | `source_verification` | `graphs/source_verification_graph.py` | SearXNG 검색 → LLM 신뢰도 심사 → 볼트 | 로컬 `SearXNG`, LLM 프록시 | `loader` 직전 |
 | `logo_design` | `graphs/logo_design_graph.py` | Concept(LLM 방향) → Press 마크(결정론) → asset craft(레이아웃) → context_test(결정론) → refine(루프) → 인쇄 준비 → HITL | `sonagi-work/press`, `sonagi-assets` | `hitl` 직전 |
+| `package_series` | `graphs/package_series_graph.py` | 마크 1회 잠금 → N개 패키지 순차 생성 → 각각 HITL → 일괄 납품 | `sonagi-work/press`, `sonagi-assets` | `series_hitl` 직전 |
 
 ### 서버에서 실행하고 Kimaki로 승인하기
 

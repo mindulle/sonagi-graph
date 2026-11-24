@@ -194,10 +194,32 @@ def concept_node(state: PackageDeliveryState) -> Dict[str, Any]:
         # LLM 실패 시 기본 방향 1개
         directions = [{"title": "기본 방향", "description": "브리프 기반", "press_concept": "press_imprint", "territory_hint": "seal_frame"}]
 
-    # 사용자가 concept을 직접 지정했으면 그것을 우선
+    # 사용자가 concept을 직접 지정했으면それを 우선
     if state.get("concept"):
         for d in directions:
             d["press_concept"] = state["concept"]
+
+    # territory 검증: 존재하지 않는 territory는 가장 가까운 것으로 보정
+    valid_territories = set()
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(PRESS_DIR / "tools"))
+        import press_ops as _po
+        valid_territories = set(_po.OPS_TERRITORIES.keys()) | set(
+            ["seed_rise", "seal_frame", "type_block", "orbit_ring", "layer_stack", "cut_field",
+             "repeat_petals", "mirror_gate", "subtract_dots", "plume_arc", "stamp_bar", "offset_duo"]
+        )
+    except Exception:
+        pass
+
+    # concept 검증
+    valid_concepts = {"seed_dispersal", "press_imprint", "ink_overlap", "monogram", "negative_space", "mascot"}
+    for d in directions:
+        if d.get("press_concept") not in valid_concepts:
+            d["press_concept"] = "press_imprint"
+        if d.get("territory_hint") and valid_territories and d["territory_hint"] not in valid_territories:
+            # 가장 가까운 territory로 보정 (첫 번째 유효)
+            d["territory_hint"] = sorted(valid_territories)[0]
 
     return {"concepts": directions, "status": "concepted"}
 
@@ -327,6 +349,35 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
             report["sizes"][size] = f"error: {str(e)[:80]}"
             report["issues"].append(f"{size}px: {str(e)[:80]}")
             penalties += 20
+
+    # SVG 구조 검증: 요소 수, viewBox, stroke 최소값
+    try:
+        import re as _re
+        element_count = len(_re.findall(r"<(circle|rect|path|polygon|ellipse|line|g)\b", mark_svg))
+        if element_count > 30:
+            report["issues"].append(f"SVG 요소 {element_count}개 — 너무 복잡 (16px에서 뭉개짐)")
+            penalties += 15
+        if element_count < 2:
+            report["issues"].append("SVG 요소가 너무 적음 — 형태가 없음")
+            penalties += 20
+        # viewBox 확인
+        vb = _re.search(r'viewBox="([^"]+)"', mark_svg)
+        if vb:
+            parts = vb.group(1).split()
+            if len(parts) == 4:
+                w, h = float(parts[2]), float(parts[3])
+                if w != h:
+                    report["issues"].append(f"viewBox 비정사각 ({w}x{h}) — 스케일링 왜곡 가능")
+                    penalties += 5
+        # stroke 최소값 확인
+        for m in _re.finditer(r'stroke-width="([0-9.]+)"', mark_svg):
+            sw = float(m.group(1))
+            if sw < 1.5:
+                report["issues"].append(f"stroke-width {sw} < 1.5 — 16px에서 사라짐")
+                penalties += 10
+                break
+    except Exception:
+        pass
 
     # 다크/라이트 대비 체크 (256px 기준)
     # vectorcraft는 투명 배경으로 렌더하므로, 배경색을 합성해서 대비를 확인한다
@@ -474,7 +525,7 @@ def route_after_hitl(state: PackageDeliveryState):
     return "publish" if state.get("approval_status") == "approved" else END
 
 
-def build_logo_design_graph(checkpointer=None):
+def build_logo_design_graph(checkpointer=None, interrupt_before=None):
     builder = StateGraph(PackageDeliveryState)
 
     builder.add_node("concept", concept_node)
@@ -508,7 +559,9 @@ def build_logo_design_graph(checkpointer=None):
     builder.add_conditional_edges("hitl", route_after_hitl, {"publish": "publish", END: END})
     builder.add_edge("publish", END)
 
-    return builder.compile(checkpointer=checkpointer, interrupt_before=["hitl"])
+    if interrupt_before is None:
+        interrupt_before = ["hitl"]
+    return builder.compile(checkpointer=checkpointer, interrupt_before=interrupt_before)
 
 
 graph = build_logo_design_graph()

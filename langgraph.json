@@ -16,7 +16,8 @@
     "copywriting_craft": "./graphs/copywriting_craft_graph.py:graph",
     "knowledge_harvester": "./graphs/knowledge_harvester_graph.py:graph",
     "source_verification": "./graphs/source_verification_graph.py:graph",
-    "logo_design": "./graphs/logo_design_graph.py:graph"
+    "logo_design": "./graphs/logo_design_graph.py:graph",
+    "package_series": "./graphs/package_series_graph.py:graph"
   },
   "python_version": "3.11"
 }
