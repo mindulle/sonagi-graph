@@ -202,10 +202,13 @@ def concept_node(state: PackageDeliveryState) -> Dict[str, Any]:
         directions = [{"title": "기본 방향", "description": "브리프 기반", "press_concept": "press_imprint", "territory_hint": "seal_frame"}]
 
     # 사용자가 concept을 직접 지정했으면それを 우선
+    # concept alias: 없음 (모든 concept이 press에 실제 존재)
+    CONCEPT_ALIASES = {}
     override = state.get("concept") or state.get("recommended_concept")
     if override:
+        resolved = CONCEPT_ALIASES.get(override, override)
         for d in directions:
-            d["press_concept"] = override
+            d["press_concept"] = resolved
 
     # territory 검증: 존재하지 않는 territory는 가장 가까운 것으로 보정
     valid_territories = set()
@@ -221,9 +224,12 @@ def concept_node(state: PackageDeliveryState) -> Dict[str, Any]:
         pass
 
     # concept 검증
-    valid_concepts = {"seed_dispersal", "press_imprint", "ink_overlap", "monogram", "negative_space", "mascot"}
+    valid_concepts = {"seed_dispersal", "press_imprint", "ink_overlap", "monogram", "negative_space", "mascot", "wordmark", "lettermark", "emblem"}
     for d in directions:
-        if d.get("press_concept") not in valid_concepts:
+        pc = d.get("press_concept")
+        if pc in CONCEPT_ALIASES:
+            d["press_concept"] = CONCEPT_ALIASES[pc]
+        elif pc not in valid_concepts:
             d["press_concept"] = "press_imprint"
         # territory_hint 검증: 가장 가까운 유효 territory로 보정
         if d.get("territory_hint") and valid_territories and d["territory_hint"] not in valid_territories:
@@ -354,10 +360,13 @@ def press_mark_node(state: PackageDeliveryState) -> Dict[str, Any]:
 
     import yaml
     palette = ["#161616", "#D97706", "#FBF9F5"]
+    # text_spec: 워드마크에 쓸 텍스트 (브리프에서 추출하거나 brand_name 사용)
+    text_spec = [brief_text] if brief_text else ["Sonagi"]
     brief_doc = {
         "brand_name": brief_text,
         "palette": palette,
         "concept": concept,
+        "text_spec": text_spec,
         "media_scope": ["web", "print", "favicon"],
     }
     brief_path = out_dir / "brief.yaml"
