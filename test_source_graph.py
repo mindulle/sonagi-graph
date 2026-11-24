@@ -6,7 +6,10 @@
 
 from dotenv import load_dotenv
 
-from graphs.source_verification_graph import graph
+from graphs.source_verification_graph import build_source_verification_graph
+from langgraph.checkpoint.memory import MemorySaver
+
+graph = build_source_verification_graph(checkpointer=MemorySaver())
 
 
 def verify():

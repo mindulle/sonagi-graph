@@ -7,6 +7,8 @@ import pytest
 from langchain_core.runnables import RunnableLambda
 
 from graphs import copywriting_craft_graph as mod
+from langgraph.checkpoint.memory import MemorySaver
+mod.graph = mod.build_copywriting_craft_graph(checkpointer=MemorySaver())
 from graphs.copywriting_craft_graph import (
     ClicheAnalysis,
     CopyOptionItem,

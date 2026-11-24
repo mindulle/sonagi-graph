@@ -8,6 +8,7 @@ from pprint import pprint
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from graphs.design_ops_graph import build_graph
+from langgraph.checkpoint.memory import MemorySaver
 
 
 def test_full_design_ops_pipeline():
@@ -15,7 +16,7 @@ def test_full_design_ops_pipeline():
         "=== 🚀 [CEO-1183] sonagi-graph ArtCraft 디자인 HITL 파이프라인 실전 검증 ==="
     )
 
-    graph = build_graph()
+    graph = build_graph(checkpointer=MemorySaver())
     thread_id = f"design_ops_test_{uuid.uuid4().hex[:6]}"
     config = {"configurable": {"thread_id": thread_id}}
 

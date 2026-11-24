@@ -14,7 +14,6 @@ import brand  # noqa: E402
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import AIMessage, HumanMessage
 
 # VectorCraft CLI 경로 탐색
@@ -655,7 +654,7 @@ def publish_node(state: DesignOpsState) -> Dict[str, Any]:
 # -------------------------------------------------------------
 # 5. Graph Compilation
 # -------------------------------------------------------------
-def build_graph():
+def build_graph(checkpointer=None):
     builder = StateGraph(DesignOpsState)
 
     builder.add_node("brief", brief_node)
@@ -669,10 +668,9 @@ def build_graph():
     builder.add_edge("hitl_checkpoint", "publish")
     builder.add_edge("publish", END)
 
-    memory = MemorySaver()
 
     # publish 노드 진입 직전에 인터럽트(중단)하여 인간 디렉터의 승인을 받습니다.
-    compiled_graph = builder.compile(checkpointer=memory, interrupt_before=["publish"])
+    compiled_graph = builder.compile(checkpointer=checkpointer, interrupt_before=["publish"])
     return compiled_graph
 
 

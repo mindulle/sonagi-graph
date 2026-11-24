@@ -7,7 +7,6 @@ from typing import Annotated, TypedDict, List, Dict, Any, Optional
 
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.prompts import ChatPromptTemplate
 
 from graphs.llm import chat_model, wiki_dir
@@ -375,6 +374,7 @@ builder.add_edge("imagery_critic", "brand_synthesizer")
 builder.add_edge("brand_synthesizer", "vault_loader")
 builder.add_edge("vault_loader", END)
 
-# Checkpointer 바인딩 및 interrupt_before 적용
-memory = MemorySaver()
-graph = builder.compile(checkpointer=memory, interrupt_before=["vault_loader"])
+def build_visual_consistency_graph(checkpointer=None):
+    return builder.compile(checkpointer=checkpointer, interrupt_before=["vault_loader"])
+
+graph = build_visual_consistency_graph()

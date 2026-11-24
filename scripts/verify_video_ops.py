@@ -5,7 +5,10 @@ from pathlib import Path
 
 # 저장소 루트를 import 경로에 넣는다 (scripts/에서 실행해도 graphs를 찾도록)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from graphs.video_ops_graph import graph
+from graphs.video_ops_graph import build_video_ops_graph
+from langgraph.checkpoint.memory import MemorySaver
+
+graph = build_video_ops_graph(checkpointer=MemorySaver())
 
 
 def test_video_ops_pipeline():

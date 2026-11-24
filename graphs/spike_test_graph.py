@@ -3,7 +3,6 @@ from typing import Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langchain_core.messages import AIMessage, HumanMessage
-from langgraph.checkpoint.memory import MemorySaver
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -16,7 +15,7 @@ def execute_node(state: AgentState):
     print("🤖 [Node: execute_node] 승인 확인 완료. 위험한 작업 실행 중...")
     return {"messages": [AIMessage(content="작업이 안전하게 완료되었습니다.")]}
 
-def build_graph():
+def build_graph(checkpointer=None):
     builder = StateGraph(AgentState)
     builder.add_node("plan", plan_node)
     builder.add_node("execute", execute_node)
@@ -26,11 +25,10 @@ def build_graph():
     builder.add_edge("execute", END)
 
     # 메모리 세이버가 있어야 스레드 상태를 저장하고 interrupt/resume이 가능합니다.
-    memory = MemorySaver()
     
     # execute 노드 진입 직전에 실행을 중단(interrupt)합니다.
     graph = builder.compile(
-        checkpointer=memory,
+        checkpointer=checkpointer,
         interrupt_before=["execute"]
     )
     return graph

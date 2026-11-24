@@ -212,6 +212,8 @@ def test_graph_emits_apply_package_only_when_bridge_verified(tmp_path, monkeypat
     """브리지가 확인되면 승인 게이트 뒤에 쓰기 묶음이 나가고, 아니면 계획만 남는다."""
     pytest.importorskip("langgraph")
     from graphs.design_token_sync_graph import build_graph
+    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.checkpoint.memory import MemorySaver
 
     monkeypatch.setattr(
         ts,
@@ -225,7 +227,7 @@ def test_graph_emits_apply_package_only_when_bridge_verified(tmp_path, monkeypat
         },
     )
     root = fixture_root(tmp_path)
-    graph = build_graph()
+    graph = build_graph(checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": f"g7-{tmp_path.name}"}}
 
     graph.invoke(
@@ -264,9 +266,10 @@ def test_graph_skips_apply_without_apply_figma_flag(tmp_path):
     """승인만으로는 쓰지 않는다. 호출자가 apply_figma를 켜야 한다."""
     pytest.importorskip("langgraph")
     from graphs.design_token_sync_graph import build_graph
+    from langgraph.checkpoint.memory import MemorySaver
 
     root = fixture_root(tmp_path)
-    graph = build_graph()
+    graph = build_graph(checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": f"g7-skip-{tmp_path.name}"}}
 
     graph.invoke(

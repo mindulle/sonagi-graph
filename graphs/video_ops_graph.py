@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import TypedDict, List, Dict, Any, Optional
 
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
 
 # CLI 바이너리 경로
 FILMCRAFT_BIN = shutil.which("filmcraft-cli") or "/usr/local/bin/filmcraft-cli"
@@ -267,7 +266,7 @@ def export_and_publish_node(state: VideoOpsState) -> Dict[str, Any]:
 # -------------------------------------------------------------
 # Graph Builder
 # -------------------------------------------------------------
-def build_video_ops_graph():
+def build_video_ops_graph(checkpointer=None):
     builder = StateGraph(VideoOpsState)
 
     builder.add_node("brief", brief_node)
@@ -283,10 +282,9 @@ def build_video_ops_graph():
     builder.add_edge("hitl_checkpoint", "export_and_publish")
     builder.add_edge("export_and_publish", END)
 
-    memory = MemorySaver()
 
     # 렌더링 비용 절약 및 디렉터 시각 검수를 위해 export 직전에 일시정지 (HITL)
-    return builder.compile(checkpointer=memory, interrupt_before=["export_and_publish"])
+    return builder.compile(checkpointer=checkpointer, interrupt_before=["export_and_publish"])
 
 
 graph = build_video_ops_graph()
