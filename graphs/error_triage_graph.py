@@ -3,15 +3,10 @@ from typing import Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from graphs.llm import chat_model
 
 # Sonagi 인프라 표준: CLIProxyAPI 게이트웨이 사용
-# text-quality: 고품질 추론용 (내부적으로 gemini-pro 계열 매핑)
-llm = ChatOpenAI(
-    model="text-quality",
-    api_key="dummy-key", # CLIProxyAPI는 인증 토큰을 요구하지만 유효성은 무시합니다.
-    base_url="http://127.0.0.1:38107/v1"
-)
+llm = chat_model("ERROR_TRIAGE_LLM_MODEL", default_model="gemini-3-flash")
 
 # 1. 상태(State) 정의: 에러 로그 분석에 필요한 상태를 담습니다.
 class TriageState(TypedDict):
@@ -89,7 +84,7 @@ def notify_result_node(state: TriageState):
     return {}
 
 # 3. 그래프 구성
-def build_error_triage_graph():
+def build_error_triage_graph(checkpointer=None):
     builder = StateGraph(TriageState)
     
     builder.add_node("extract_info", extract_info_node)
@@ -102,7 +97,7 @@ def build_error_triage_graph():
     builder.add_edge("notify_result", END)
     
     # 가장 가벼운 워크플로우이므로 현재는 체크포인터(HITL) 없이 바로 리포트만 뱉습니다.
-    graph = builder.compile()
+    graph = builder.compile(checkpointer=checkpointer)
     return graph
 
 # LangGraph Server용 진입점
