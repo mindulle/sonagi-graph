@@ -37,3 +37,43 @@ jobs:
         env:
           SONAGI_ASSETS_DIR: ${{ github.workspace }}/sonagi-assets
         run: python3 -m pytest test_brand_tokens.py test_craft.py -q -rs
+
+  design-tokens:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: MDS 토큰 정본
+        uses: actions/checkout@v4
+        with:
+          repository: mindulle/mindulle-design-system
+          path: mindulle-design-system
+          sparse-checkout: packages/tokens
+
+      - name: sonagi-assets (투영)
+        uses: actions/checkout@v4
+        with:
+          repository: mindulle/sonagi-assets
+          path: sonagi-assets
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test deps
+        run: python3 -m pip install --quiet pytest langgraph langchain-core
+
+      - name: 정본 확인
+        env:
+          MDS_TOKENS_DIR: ${{ github.workspace }}/mindulle-design-system/packages/tokens
+          SONAGI_ASSETS_DIR: ${{ github.workspace }}/sonagi-assets
+        run: |
+          test -f "$MDS_TOKENS_DIR/tokens/primitives.json"
+          test -f "$SONAGI_ASSETS_DIR/tokens/semantic.json"
+
+      - name: 토큰 동기화 (검사·결정론·그래프)
+        env:
+          MDS_TOKENS_DIR: ${{ github.workspace }}/mindulle-design-system/packages/tokens
+          SONAGI_ASSETS_DIR: ${{ github.workspace }}/sonagi-assets
+        run: python3 -m pytest test_token_sync.py -q -rs
