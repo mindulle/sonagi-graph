@@ -608,3 +608,19 @@ def scout_references(brief, items, limit=REF_LIMIT, quota=None):
 def select_references(brief, items, limit=REF_LIMIT, quota=None):
     """`scout_references`의 references만. 기존 호출부·테스트 호환용."""
     return scout_references(brief, items, limit=limit, quota=quota)["references"]
+
+
+def scout_decision(references, report=None, names_limit=6):
+    """원장에 남길 스카우트 한 줄(`ledger.py --decision` 형식).
+
+    `ledger.py`는 `key=choice: 이유`로 자른다. 그래서 **choice 안에 `:`를 쓰면
+    이유가 거기서 잘린다**. 역할 수는 `role=count`로 적고 콜론을 남기지 않는다.
+    """
+    references = list(references or [])
+    if not references:
+        return "scout=0건: 주제어 일치 없음"
+    names = ", ".join(str(ref.get("name")) for ref in references[:names_limit])
+    filled = (report or {}).get("filled") or {}
+    roles = ",".join(f"{role}={count}" for role, count in filled.items())
+    suffix = f" [{roles}]" if roles else ""
+    return f"scout={len(references)}건{suffix}: {names}"

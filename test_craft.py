@@ -316,3 +316,32 @@ def test_coffee_brief_finds_real_illustration():
     if not any(i.get("name") == "coffee" for i in items):
         pytest.skip("coffee 자산이 카탈로그에 없음(픽스처)")
     assert any(r["name"] == "coffee" for r in refs["references"])
+
+
+def _split_ledger_decision(raw):
+    """scripts/ledger.py의 parse_decision과 같은 규칙."""
+    key, rest = raw.split("=", 1)
+    choice, _, reason = rest.partition(":")
+    return key.strip(), choice.strip(), reason.strip()
+
+
+def test_scout_decision_keeps_role_counts_in_choice():
+    # 실카탈로그 스카우트는 역할별로 채워진다. `role:count`로 적으면
+    # ledger.py가 그 콜론에서 잘라 choice가 `4건 [illustration`이 된다.
+    refs = [
+        {"name": "camera", "role": "icon", "scope": "bundle"},
+        {"name": "camera-ai", "role": "icon", "scope": "bundle"},
+        {"name": "vintage-camera", "role": "illustration", "scope": "bundle"},
+    ]
+    report = {"filled": {"illustration": 1, "icon": 2, "typography": 0}}
+    key, choice, reason = _split_ledger_decision(craft.scout_decision(refs, report))
+    assert key == "scout"
+    assert choice == "3건 [illustration=1,icon=2,typography=0]"
+    assert reason == "camera, camera-ai, vintage-camera"
+
+
+def test_scout_decision_without_references_says_why():
+    key, choice, reason = _split_ledger_decision(craft.scout_decision([]))
+    assert key == "scout"
+    assert choice == "0건"
+    assert "주제어" in reason
