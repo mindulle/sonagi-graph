@@ -24,6 +24,7 @@ services:
       - /usr/local/bin/effectcraft-cli:/usr/local/bin/effectcraft-cli:ro
       - /usr/local/bin/vectorcraft-cli:/usr/local/bin/vectorcraft-cli:ro
       - /tmp/video_ops:/tmp/video_ops
+      - /tmp/package_delivery:/tmp/package_delivery
     environment:
       # 호스트 서비스는 0.0.0.0에 바인딩되어 있다. Docker 브릿지 IP로 접근한다.
       OPENAI_API_BASE: http://172.19.0.1:38107/v1
