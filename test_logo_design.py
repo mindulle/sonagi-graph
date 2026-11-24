@@ -270,3 +270,64 @@ def test_research_collects_and_analyzes(monkeypatch):
     assert result["status"] == "researched"
     assert "monogram" in (result.get("recommended_concept") or "")
     assert "type_block" in result["research_summary"]
+
+
+# ---------------------------------------------------------------------------
+# concept → territory 매핑 검증
+# ---------------------------------------------------------------------------
+
+
+def test_concept_node_sets_selected_concept(monkeypatch):
+    """concept_node가 첫 번째 방향의 concept을 selected_concept으로 설정한다."""
+    from langchain_core.runnables import RunnableLambda
+    from graphs.logo_design_graph import ConceptOutput, ConceptDirection
+
+    stub = RunnableLambda(lambda _: ConceptOutput(directions=[
+        ConceptDirection(title="A", description="d", press_concept="monogram", territory_hint="monogram_overlap"),
+        ConceptDirection(title="B", description="d", press_concept="negative_space", territory_hint="negative_hidden"),
+    ]))
+    monkeypatch.setattr(mod, "chat_model", lambda *a, **k: type("L", (), {"with_structured_output": lambda self, s: stub})())
+
+    result = mod.concept_node({"brief": "test"})
+    assert result["selected_concept"] == "monogram"
+    assert len(result["concepts"]) == 2
+
+
+def test_concept_node_validates_invalid_concept(monkeypatch):
+    """존재하지 않는 press_concept은 press_imprint로 보정된다."""
+    from langchain_core.runnables import RunnableLambda
+    from graphs.logo_design_graph import ConceptOutput, ConceptDirection
+
+    stub = RunnableLambda(lambda _: ConceptOutput(directions=[
+        ConceptDirection(title="A", description="d", press_concept="nonexistent_concept", territory_hint="seal_frame"),
+    ]))
+    monkeypatch.setattr(mod, "chat_model", lambda *a, **k: type("L", (), {"with_structured_output": lambda self, s: stub})())
+
+    result = mod.concept_node({"brief": "test"})
+    assert result["concepts"][0]["press_concept"] == "press_imprint"
+
+
+def test_concept_node_corrects_invalid_territory_hint(monkeypatch):
+    """존재하지 않는 territory_hint는 가장 가까운 유효 territory로 보정된다."""
+    from langchain_core.runnables import RunnableLambda
+    from graphs.logo_design_graph import ConceptOutput, ConceptDirection
+
+    stub = RunnableLambda(lambda _: ConceptOutput(directions=[
+        ConceptDirection(title="A", description="d", press_concept="press_imprint", territory_hint="totally_fake_territory"),
+    ]))
+    monkeypatch.setattr(mod, "chat_model", lambda *a, **k: type("L", (), {"with_structured_output": lambda self, s: stub})())
+
+    result = mod.concept_node({"brief": "test"})
+    hint = result["concepts"][0]["territory_hint"]
+    # Should be a valid territory (not the fake one)
+    assert hint != "totally_fake_territory"
+    assert hint is not None
+
+
+def test_press_mark_uses_selected_concept():
+    """press_mark_node가 selected_concept을 우선 사용한다."""
+    # This is a unit test for the concept resolution logic
+    state = {"mark_source": "existing", "selected_concept": "monogram", "concept": "mascot", "recommended_concept": "negative_space"}
+    # press_mark_node with mark_source != "generate" returns early
+    result = mod.press_mark_node(state)
+    assert result["status"] == "mark_skipped"

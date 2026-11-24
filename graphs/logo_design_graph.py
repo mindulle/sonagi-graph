@@ -224,11 +224,34 @@ def concept_node(state: PackageDeliveryState) -> Dict[str, Any]:
     for d in directions:
         if d.get("press_concept") not in valid_concepts:
             d["press_concept"] = "press_imprint"
+        # territory_hint 검증: 가장 가까운 유효 territory로 보정
         if d.get("territory_hint") and valid_territories and d["territory_hint"] not in valid_territories:
-            # 가장 가까운 territory로 보정 (첫 번째 유효)
-            d["territory_hint"] = sorted(valid_territories)[0]
+            hint = d["territory_hint"]
+            # 가장 긴 공통 접두사를 가진 territory 선택
+            best = None
+            best_score = -1
+            for t in valid_territories:
+                # 공통 접두사 길이
+                common = 0
+                for a, b in zip(hint, t):
+                    if a == b:
+                        common += 1
+                    else:
+                        break
+                if common > best_score:
+                    best_score = common
+                    best = t
+            d["territory_hint"] = best if best else sorted(valid_territories)[0]
 
-    return {"concepts": directions, "status": "concepted"}
+    # 첫 번째 방향의 concept을 selected_concept으로 설정
+    # (디렉터가 HITL에서 다른 방향을 선택할 수 있도록 concepts 목록도 보존)
+    selected = directions[0].get("press_concept", "press_imprint") if directions else "press_imprint"
+
+    return {
+        "concepts": directions,
+        "selected_concept": selected,
+        "status": "concepted",
+    }
 
 
 
