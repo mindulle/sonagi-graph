@@ -188,4 +188,25 @@ manifest 상태는 `warn`). 문자열 `"false"` 같은 값은 우회로 인정�
 - `export_print.py`는 Chromium을 쓴다. snap Chromium은 `/tmp`(PrivateTmp)를 읽지 못하므로
   실행 루트(`SONAGI_OUT_ROOT`)가 Chromium에서 접근 가능한 경로여야 한다.
 
+### 8.3 brand
+
+`spec["brand"]`가 계약이다. 마크는 **사용자가 만든 SVG**이며(`mark_path` 필수),
+그래프는 마크를 그리지 않고 납품 가능한 상태로만 만든다. `palette`
+(`ink`·`paper`·`accent`·`calm`)·`variants`(`sizes`·`backgrounds`)·`name`은 선택이다.
+
+파이프라인은 정규화 → 아웃라인 → 게이트 → 팩 순서다.
+
+| 단계 | 내용 |
+| --- | --- |
+| `normalize` | `<style>`·`var()`·`class`를 프레젠테이션 속성으로 편다(순수 파이썬, 결정론). `:root` 라이트 값만 쓰고 다크 테마는 버린다 |
+| `outline` | `vectorcraft-cli convert IN OUT --outline-text` (CLI 없으면 실행형 안내와 함께 중단) |
+| 게이트 | `<text>` 0 · `<style>`/`var()` 0 · 256px 불투명 픽셀 > 0(E015 빈 렌더) · PDF > 0B — fail closed |
+| 팩 | `normalized.svg`·`outlined.svg`·`mark.pdf`·PNG 2000(최대 높이 3000)·JPG q90·사이즈/배경 PNG·`meta.json`·`entry.md` |
+
+- 게이트 우회는 테스트에서만 `spec["allow_brand_checks"] = true`다(문자열 `"false"`는
+  우회로 인정하지 않는다 — print와 같은 규칙). 우회한 실패는 `skipped`로 남고 manifest는 `warn`이다.
+- 아이콘 변주는 2000px PNG를 Pillow로 줄인다(외부 프로세스 없음). 배경은 팔레트의
+  `paper`(light)·`ink`(dark)다.
+- 목업은 web의 카드 헬퍼를 재사용하고(없으면 같은 규격으로 직접), 아이콘 타일을 더한다.
+
 

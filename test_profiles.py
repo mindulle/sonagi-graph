@@ -148,16 +148,16 @@ def test_profile_resolution_order():
 
 def test_unknown_profile_error_is_actionable():
     with pytest.raises(base.ProfileError) as exc:
-        base.get_profile("brand")
+        base.get_profile("spreadsheet")
     message = str(exc.value)
-    assert "brand" in message
-    assert "web" in message and "print" in message
+    assert "spreadsheet" in message
+    assert "web" in message and "print" in message and "brand" in message
     assert "spec['profile']" in message
 
 
 def test_unknown_profile_stops_spec_node():
     with pytest.raises(base.ProfileError):
-        entry.spec_node({"brief": "x", "spec": {"contest_type": "brand"}})
+        entry.spec_node({"brief": "x", "spec": {"contest_type": "spreadsheet"}})
 
 
 def test_print_spec_node_fails_fast_without_package():

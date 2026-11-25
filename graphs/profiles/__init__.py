@@ -1,7 +1,7 @@
 """profiles — 납품 형식 레지스트리 (GRAPH-17).
 
 `profile_for_spec(spec)`로 고르고, `get_profile(name)`으로 직접 꺼낸다.
-내장 profile은 `web`·`print` 두 가지이며, 새 형식은 파일 하나 + `register()`다.
+내장 profile은 `web`·`print`·`brand` 세 가지이며, 새 형식은 파일 하나 + `register()`다.
 """
 
 from __future__ import annotations
@@ -27,13 +27,17 @@ from graphs.profiles.base import (
     svg_width,
     to_jpg,
 )
+from graphs.profiles.brand import BrandProfile, BrandGateError
 from graphs.profiles.print import PrintGateError, PrintProfile
 from graphs.profiles.web import WebProfile
 
 register(WebProfile())
 register(PrintProfile())
+register(BrandProfile())
 
 __all__ = [
+    "BrandGateError",
+    "BrandProfile",
     "DEFAULT_PROFILE",
     "Gate",
     "PrintGateError",
