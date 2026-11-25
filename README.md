@@ -65,9 +65,22 @@ Kimaki 흐름:
 | --- | --- |
 | `/home/ubuntu/llm-wiki` | `editorial_verification`, `visual_consistency`, `knowledge_harvester`, `source_verification` |
 | `/home/ubuntu/sonagi-assets` | `design_ops`, `entry_pack`, `brand.py`, `adapters/assets.py` |
+| `/home/ubuntu/entry_pack` | `entry_pack` 산출물. 컨테이너의 `/tmp/entry_pack`(기본 `SONAGI_ENTRY_OUT`)에 같은 디렉터리로 붙는다 |
+| `~/.local/share/fonts` → `/usr/share/fonts/local` (ro) | 브랜드 아웃라인 폰트(`brand` 프로필의 `text-to-path`) |
 | `mindulle-design-system/packages/tokens` | `design_token_sync` |
 | `/usr/local/bin/{filmcraft,effectcraft,vectorcraft}-cli` | `video_ops`, `design_ops`, `entry_pack` |
 | `/var/www/craft-suite` | `video_ops` CDN 배포 |
+
+`/home/ubuntu/sonagi-assets`에는 카탈로그뿐 아니라 그 카탈로그가 가리키는 실자산
+라이브러리(7.2GB)가 있어야 한다. 두 파일 모두 devops에서 동기화한다 —
+`scripts/sync_catalog.sh` → `scripts/sync_library.sh` 순서. 라이브러리 동기화가
+카탈로그 경로(`/srv/...` → `/home/ubuntu/...`)까지 다시 쓴다.
+자세한 내용은 `docs/CATALOG_SYNC.md`.
+
+`entry_pack` 산출물은 호스트와 컨테이너에서 **같은 경로**(`/home/ubuntu/entry_pack`)에
+쓴다(`SONAGI_ENTRY_OUT`). 그래야 상태에 기록되는 manifest 경로를 호스트의
+`scripts/graph_cli.py show <thread_id>`가 그대로 읽는다. `/tmp/entry_pack`에도 같은
+디렉터리가 붙어 있어 `/tmp`를 하드코딩한 호출부도 그대로 동작한다.
 
 ```bash
 langgraph up -p 8123 --recreate -d docker-compose.deploy.yml
@@ -326,6 +339,7 @@ assets.write_ledger(result["renders"][0], ["style=...: 판정 pass · 점수 100
 | `SONAGI_CATALOG`    | `<assets>/catalog/catalog.json` (없으면 골든) | 자산 카탈로그 — `docs/CATALOG_SYNC.md` |
 | `SONAGI_TOKENS`     | `<assets>/tokens/semantic.json`          | 린터가 쓰는 토큰             |
 | `SONAGI_CRAFT_OUT`  | `/tmp/asset_craft`                       | 변주 출력 루트(레거시 별칭)  |
+| `SONAGI_ENTRY_OUT`  | `/tmp/entry_pack`                        | `entry_pack` 출력 루트(컨테이너는 `/home/ubuntu/entry_pack`) |
 | `SONAGI_CRAFT_REFS` | `8`                                      | 스카우트가 고를 참고 자산 수 |
 
 판단 로직은 `craft.py`에 있고 LangGraph에 의존하지 않는다(`test_craft.py`).
