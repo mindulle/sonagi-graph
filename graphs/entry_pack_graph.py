@@ -56,7 +56,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import sys
 import urllib.parse
 import urllib.request
@@ -74,6 +73,12 @@ from graphs.core import artifacts as core_artifacts  # noqa: E402
 from graphs.core import env as core_env  # noqa: E402
 from graphs.core import exec as core_exec  # noqa: E402
 from graphs.llm import chat_model  # noqa: E402
+from graphs.profiles import base as profiles_base  # noqa: E402
+from graphs.profiles.base import svg_size as _svg_size  # noqa: E402
+from graphs.profiles.base import svg_width as _svg_width  # noqa: E402
+from graphs.profiles.web import WebProfile  # noqa: E402
+from graphs.profiles.web import direction_text as _direction_text  # noqa: E402
+from graphs.profiles.web import fallback_direction as _fallback_direction  # noqa: E402
 
 #: 경로·주소는 core/env가 단일 정의한다. 여기 이름은 기존 호출부·테스트를 위한 얇은
 #: 별칭일 뿐, 기본값을 다시 선언하지 않는다(`SONAGI_ENTRY_OUT` 별칭은 core가 안다).
@@ -87,16 +92,7 @@ OUT_ROOT: Path = core_env.out_root("entry_pack")
 SEARXNG_URL: str = _PATHS.searxng_url
 VECTORCRAFT: str = _PATHS.vectorcraft
 
-DEFAULT_SPEC: Dict[str, Any] = {
-    "platform": "generic",
-    "styles_per_direction": 2,
-    "variant_cap": 24,
-    "top_n": 9,
-    "mockups": 3,
-    "image_width": 2000,
-    "max_height": 3000,
-    "jpg_quality": 90,
-}
+DEFAULT_SPEC: Dict[str, Any] = WebProfile().defaults()
 
 
 class EntryState(TypedDict, total=False):
@@ -134,27 +130,13 @@ def _run(args, timeout: int = 300) -> str:
 
 
 def _artifact_entry(path: Any, root: Path) -> Optional[Dict[str, Any]]:
-    """manifest 항목 하나. 실행 루트 밖 파일은 절대 경로로 남긴다."""
-    target = Path(path)
-    if not target.is_file():
-        return None
-    try:
-        return core_artifacts.artifact_entry(target, root=root)
-    except ValueError:  # root 밖(예: 외부 브리프 파일)
-        return core_artifacts.artifact_entry(target)
+    """manifest 항목 하나(profile 공통 구현으로 위임)."""
+    return profiles_base.artifact_entry(path, root)
 
 
 def _collect_artifacts(paths: List[Any], root: Path) -> List[Dict[str, Any]]:
     """경로 목록 → manifest 산출물 항목(중복 제거, 순서 유지)."""
-    rows: List[Dict[str, Any]] = []
-    seen = set()
-    for path in paths:
-        entry = _artifact_entry(path, root)
-        if entry is None or entry["path"] in seen:
-            continue
-        seen.add(entry["path"])
-        rows.append(entry)
-    return rows
+    return profiles_base.collect_artifacts(paths, root)
 
 
 def _build_manifest(
@@ -165,46 +147,23 @@ def _build_manifest(
     status: str = "ok",
 ) -> Dict[str, Any]:
     """입력 지문(브리프 해시·시드·spec 해시)과 산출물 해시를 담은 run manifest."""
-    spec = state.get("spec") or {}
-    brief = str(state.get("content") or state.get("brief") or "")
-    return core_artifacts.build_manifest(
-        run_id=run_dir.name,
-        kind="entry_pack",
-        status=status,
-        inputs={
-            "brief_sha256": core_artifacts.sha256_bytes(brief.encode("utf-8")),
-            "seed": str(spec.get("seed") or ""),
-            "spec_sha256": core_artifacts.sha256_json(spec),
-        },
-        artifacts=artifacts,
-        meta={
-            "platform": spec.get("platform"),
-            "media": spec.get("media"),
-            "variants": len(state.get("variants") or []),
-            "selection": list(state.get("selection") or []),
-        },
+    return profiles_base.run_manifest(
+        state, run_dir, artifacts, kind="entry_pack", status=status
     )
 
 
-def _svg_size(path: Path) -> tuple[float, float]:
-    head = path.read_text(encoding="utf-8")[:400]
-    width = re.search(r'<svg[^>]*\bwidth="([0-9.]+)', head)
-    height = re.search(r'<svg[^>]*\bheight="([0-9.]+)', head)
-    return (
-        float(width.group(1)) if width else 1200.0,
-        float(height.group(1)) if height else 900.0,
+def _profile_context(run_dir: Optional[Path] = None) -> profiles_base.ProfileContext:
+    """지금 이 모듈의 실행 훅으로 컨텍스트를 만든다(테스트 monkeypatch 전파)."""
+    return profiles_base.ProfileContext(
+        run=_run,
+        convert_png=_convert_png,
+        to_jpg=_to_jpg,
+        out_root=OUT_ROOT,
+        assets_dir=ASSETS_DIR,
+        catalog=CATALOG,
+        tokens=TOKENS,
+        run_dir=run_dir,
     )
-
-
-def _svg_width(path: Path) -> float:
-    return _svg_size(path)[0]
-
-
-def _direction_text(direction: Dict[str, Any]) -> str:
-    parts = [direction.get("title", ""), direction.get("description", "")]
-    parts += [str(m) for m in direction.get("motifs") or []]
-    parts.append(direction.get("visual_language", ""))
-    return " ".join(p for p in parts if p)
 
 
 # ---------------------------------------------------------------------------
@@ -216,8 +175,11 @@ def spec_node(state: EntryState) -> Dict[str, Any]:
     """브리프를 IR로 바꾸고 플랫폼·규격·시드 기본값을 확정한다."""
     raw = state.get("brief") or state.get("content") or ""
     ir = craft.parse_brief(raw)
-    spec = dict(DEFAULT_SPEC)
-    spec.update(state.get("spec") or {})
+    raw_spec = dict(state.get("spec") or {})
+    # profile 해석은 기본값 병합보다 먼저 — web/print가 서로 다른 기본값을 갖는다.
+    profile = profiles_base.profile_for_spec(raw_spec)
+    spec = dict(profile.defaults())
+    spec.update(raw_spec)
     spec["tones"] = list(spec.get("tones") or ir.get("tones") or ["편집"])
     spec["media"] = spec.get("media") or ir.get("media", "web")
     if "themes" not in spec:
@@ -226,6 +188,10 @@ def spec_node(state: EntryState) -> Dict[str, Any]:
         spec["breakpoints"] = ["desktop"] if spec["media"] == "web" else ["mobile"]
     if not spec.get("seed"):
         spec["seed"] = hashlib.sha1(str(raw).encode("utf-8")).hexdigest()[:8]
+    # 선택 훅: profile이 입력을 먼저 검증하면 knowledge·LLM 호출 전에 멈춘다.
+    validate = getattr(profile, "validate", None)
+    if callable(validate):
+        validate(spec)
     run_id = state.get("run_id") or f"entry-{uuid.uuid4().hex[:8]}"
     return {"ir": ir, "spec": spec, "run_id": run_id, "status": "specified"}
 
@@ -298,16 +264,6 @@ def knowledge_node(state: EntryState) -> Dict[str, Any]:
     return {"knowledge": knowledge, "status": "knowledge"}
 
 
-def _fallback_direction(ir: Dict[str, Any]) -> Dict[str, Any]:
-    tones = " · ".join(ir.get("tones") or ["편집"])
-    return {
-        "title": "기본 방향",
-        "description": f"{tones} 톤의 기본 구성",
-        "motifs": [],
-        "visual_language": "",
-    }
-
-
 def direction_node(state: EntryState) -> Dict[str, Any]:
     """LLM으로 서로 다른 시각 방향 3~5개를 만든다."""
     from graphs.logo_design_graph import ConceptDirection, ConceptOutput
@@ -355,56 +311,18 @@ def direction_node(state: EntryState) -> Dict[str, Any]:
 
 
 def variants_node(state: EntryState) -> Dict[str, Any]:
-    """방향 × 스타일 × 브레이크포인트 × 테마로 후보를 만든다(시드 고정)."""
+    """방향 × 스타일 × 브레이크포인트 × 테마로 후보를 만든다(profile에 위임)."""
     spec = state.get("spec") or {}
     ir = state.get("ir") or craft.parse_brief(state.get("brief", ""))
     directions = state.get("directions") or [_fallback_direction(ir)]
     styles = craft.load_registry(ASSETS_DIR)
-
-    per_direction: List[Dict[str, Any]] = []
-    remaining = list(styles)
-    for index, direction in enumerate(directions):
-        brief = dict(ir)
-        brief["purpose"] = _direction_text(direction)
-        brief["tones"] = list(ir.get("tones") or ["편집"])
-        # 이미 쓴 스타일은 다음 방향에서 빼서 방향마다 다른 조합이 나오게 한다.
-        pool = remaining or styles
-        plan = craft.plan_variants(
-            brief,
-            pool,
-            limit=int(spec.get("styles_per_direction", 2)),
-            breakpoints=tuple(spec.get("breakpoints") or ("desktop",)),
-            themes=tuple(spec.get("themes") or ("light",)),
-            seed=f"{spec.get('seed')}-{index}",
-        )
-        used_names = {v["style"] for v in plan}
-        used_ids = {v["style_id"] for v in plan}
-        remaining = [
-            s
-            for s in remaining
-            if s.get("name") not in used_names and s.get("id") not in used_ids
-        ]
-        for variant in plan:
-            variant["direction"] = direction.get("title", f"방향 {index + 1}")
-            variant["direction_index"] = index
-            variant["motifs"] = list(direction.get("motifs") or [])
-            per_direction.append(variant)
-
-    seen = set()
-    variants = []
-    for variant in per_direction:
-        key = (variant["style"], variant["breakpoint"], variant["theme"])
-        if key in seen:
-            continue
-        seen.add(key)
-        variants.append(variant)
-        if len(variants) >= int(spec.get("variant_cap", 24)):
-            break
+    profile = profiles_base.profile_for_spec(spec)
+    variants = profile.plan({**ir, "directions": directions}, spec, styles)
     return {"variants": variants, "status": "variants"}
 
 
 def render_node(state: EntryState) -> Dict[str, Any]:
-    """후보마다 SVG를 렌더한다(render_recipe, 결정론)."""
+    """후보마다 렌더한다(profile에 위임, 결정론)."""
     spec = state.get("spec") or {}
     variants = state.get("variants") or []
     if not variants:
@@ -413,58 +331,15 @@ def render_node(state: EntryState) -> Dict[str, Any]:
     run_id = state.get("run_id", "entry")
     run_dir = OUT_ROOT / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    content = state.get("content") or state.get("brief") or ""
-    content_path = Path(str(content))
-    if not content_path.is_file():
-        content_path = run_dir / "brief.md"
-        content_path.write_text(str(content), encoding="utf-8")
-
-    recipe = run_dir / "recipe.json"
-    _run(
-        [
-            sys.executable,
-            ASSETS_DIR / "scripts/import_content.py",
-            content_path,
-            "--catalog",
-            CATALOG,
-            "--out",
-            recipe,
-        ]
-    )
+    ctx = _profile_context(run_dir)
+    ctx.extra["content"] = state.get("content") or state.get("brief") or ""
+    profile = profiles_base.profile_for_spec(spec)
 
     renders = []
     for variant in variants:
-        out = run_dir / variant["id"]
-        cmd = [
-            sys.executable,
-            ASSETS_DIR / "scripts/render_recipe.py",
-            "--recipe",
-            recipe,
-            "--style",
-            ASSETS_DIR / "styles" / f"{variant['style']}.json",
-            "--catalog",
-            CATALOG,
-            "--tokens",
-            TOKENS,
-            "--out",
-            out,
-            "--breakpoint",
-            variant["breakpoint"],
-        ]
-        if variant.get("theme") == "dark":
-            cmd.append("--dark")
-        _run(cmd)
-        svg = next(out.glob("*.svg"), None)
-        manifest = next(out.glob("*.manifest.json"), None)
-        if not svg:
-            continue
-        renders.append(
-            {
-                **variant,
-                "svg": str(svg),
-                "manifest": str(manifest) if manifest else None,
-            }
-        )
+        rendered = profile.render(variant, ctx)
+        if rendered:
+            renders.append(rendered)
 
     render_paths: List[Any] = []
     for render in renders:
@@ -480,7 +355,7 @@ def render_node(state: EntryState) -> Dict[str, Any]:
     manifest_path = core_artifacts.write_manifest(run_dir, manifest)
 
     return {
-        "recipe": str(recipe),
+        "recipe": ctx.extra.get("recipe"),
         "renders": renders,
         "manifest": str(manifest_path),
         "manifest_digest": core_artifacts.manifest_digest(manifest),
@@ -489,7 +364,30 @@ def render_node(state: EntryState) -> Dict[str, Any]:
 
 
 def critic_node(state: EntryState) -> Dict[str, Any]:
-    """린트로 기계 판정한다. FAIL은 선택지에서 빠진다."""
+    """린트로 기계 판정한다. FAIL은 선택지에서 빠진다.
+
+    profile이 자체 게이트를 가지면(print 등) web 린트 규칙(hero·레이어 수·contract)은
+    적용 대상이 아니다. 이때는 후보를 통과로 두고, 실제 검사는 profile의 pack 게이트가
+    맡는다 — 여기서 막으면 사람이 고를 선택지가 사라진다.
+    """
+    spec = state.get("spec") or {}
+    profile = profiles_base.profile_for_spec(spec)
+    if profile.gates():
+        critiques = [
+            {
+                "id": render["id"],
+                "verdict": "pass",
+                "findings": [],
+                "plan_score": render.get("score", 0),
+                "svg": render["svg"],
+                "direction": render.get("direction"),
+                "style": render.get("style"),
+                "theme": render.get("theme"),
+            }
+            for render in state.get("renders") or []
+        ]
+        return {"critiques": critiques, "status": "critiqued"}
+
     critiques = []
     for render in state.get("renders") or []:
         cmd = [
@@ -557,229 +455,42 @@ def hitl_node(state: EntryState) -> Dict[str, Any]:
 
 
 def _convert_png(svg: Path, out: Path, width: int, max_height: int = 3000) -> None:
-    """목표 폭·최대 높이 안에 들어가게 스케일을 정한다(긴 페이지도 업로드 규격 유지)."""
-    native_w, native_h = _svg_size(svg)
-    native_w = native_w or 1200.0
-    native_h = native_h or 900.0
-    scale = min(float(width) / native_w, float(max_height) / native_h)
-    scale = max(0.1, min(8.0, scale))
-    _run([VECTORCRAFT, "convert", svg, out, "--scale", round(scale, 4)], timeout=120)
+    """목표 폭·최대 높이 안에 들어가게 스케일을 정한다(공통 변환기 위임)."""
+    profiles_base.convert_png(svg, out, width, max_height, run=_run)
 
 
 def _to_jpg(png: Path, out: Path, quality: int = 90) -> None:
-    """JPG는 알파를 흰 배경으로 합성한다(투명 영역이 검게 나오지 않게)."""
-    from PIL import Image
-
-    with Image.open(png) as image:
-        if image.mode in ("RGBA", "LA", "P"):
-            rgba = image.convert("RGBA")
-            base = Image.new("RGB", rgba.size, (255, 255, 255))
-            base.paste(rgba, mask=rgba.split()[-1])
-            rgb = base
-        else:
-            rgb = image.convert("RGB")
-        rgb.save(out, "JPEG", quality=quality, optimize=True)
-
-
-def _describe(state: EntryState, option: Dict[str, Any]) -> str:
-    spec = state.get("spec") or {}
-    direction = next(
-        (
-            d
-            for d in state.get("directions") or []
-            if d.get("title") == option.get("direction")
-        ),
-        {},
-    )
-    if spec.get("skip_llm"):
-        motifs = ", ".join(direction.get("motifs") or []) or "형태 중심"
-        return (
-            f"{option.get('direction') or '기본 방향'} — "
-            f"{direction.get('description') or '브리프 기반 구성'}. "
-            f"모티프: {motifs}. 스타일 {option.get('style')} ({option.get('theme')})."
-        )
-    try:
-        llm = chat_model(
-            "ENTRY_COPY_LLM_MODEL", default_model="gemini-3-flash", temperature=0.6
-        )
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "콘테스트 제출용 설명을 2~3문장으로 쓰세요. 미사여구 없이 무엇을 왜 그렇게 했는지.",
-                ),
-                (
-                    "user",
-                    "브리프: {brief}\n방향: {direction}\n모티프: {motifs}\n스타일: {style} ({theme})",
-                ),
-            ]
-        )
-        resp = (prompt | llm).invoke(
-            {
-                "brief": state.get("brief", ""),
-                "direction": option.get("direction", ""),
-                "motifs": ", ".join(direction.get("motifs") or []),
-                "style": option.get("style", ""),
-                "theme": option.get("theme", ""),
-            }
-        )
-        text = str(getattr(resp, "content", resp)).strip()
-        if text:
-            return text
-    except Exception:  # noqa: BLE001
-        pass
-    return f"{option.get('direction') or '기본 방향'} — 스타일 {option.get('style')} ({option.get('theme')})."
+    """JPG는 알파를 흰 배경으로 합성한다(공통 변환기 위임)."""
+    profiles_base.to_jpg(png, out, quality)
 
 
 def pack_node(state: EntryState) -> Dict[str, Any]:
-    """선택된 후보를 제출 규격(PNG·JPG)으로 내보내고 설명·메타를 묶는다."""
+    """선택된 후보를 납품 팩으로 묶는다(profile에 위임)."""
     spec = state.get("spec") or {}
     selection = state.get("selection") or []
     by_id = {r["id"]: r for r in state.get("renders") or []}
-    options = {o["id"]: o for o in state.get("options") or []}
+    items = [by_id[variant_id] for variant_id in selection if variant_id in by_id]
+
     run_dir = OUT_ROOT / state.get("run_id", "entry")
-    pack_dir = run_dir / "pack"
-    pack_dir.mkdir(parents=True, exist_ok=True)
-
-    width = int(spec.get("image_width", 2000))
-    max_height = int(spec.get("max_height", 3000))
-    quality = int(spec.get("jpg_quality", 90))
-    items = []
-    for variant_id in selection:
-        render = by_id.get(variant_id)
-        if not render:
-            continue
-        svg = Path(render["svg"])
-        png = pack_dir / f"{variant_id}.png"
-        jpg = pack_dir / f"{variant_id}.jpg"
-        _convert_png(svg, png, width, max_height)
-        _to_jpg(png, jpg, quality)
-        option = options.get(variant_id) or render
-        items.append(
-            {
-                "id": variant_id,
-                "direction": option.get("direction"),
-                "style": render.get("style"),
-                "theme": render.get("theme"),
-                "svg": str(svg),
-                "png": str(png),
-                "jpg": str(jpg),
-                "png_size": png.stat().st_size,
-                "jpg_size": jpg.stat().st_size,
-                "sha256": core_artifacts.sha256_file(png),
-                "description": _describe(state, option),
-            }
-        )
-
-    meta = {
-        "platform": spec.get("platform"),
-        "brief": state.get("brief", ""),
-        "seed": spec.get("seed"),
-        "image_width": width,
-        "variants_total": len(state.get("variants") or []),
-        "rendered_total": len(state.get("renders") or []),
-        "selected_total": len(items),
-        "items": items,
-    }
-    (pack_dir / "meta.json").write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-
-    lines = [f"# 엔트리 팩 — {spec.get('platform')}", ""]
-    for item in items:
-        lines += [
-            f"## {item['id']}",
-            f"- 방향: {item['direction']}",
-            f"- 스타일: {item['style']} ({item['theme']})",
-            f"- PNG: `{Path(item['png']).name}` ({item['png_size']:,}B)",
-            f"- JPG: `{Path(item['jpg']).name}` ({item['jpg_size']:,}B)",
-            "",
-            item["description"],
-            "",
-        ]
-    (pack_dir / "entry.md").write_text("\n".join(lines), encoding="utf-8")
-
-    artifact_paths: List[Any] = []
-    for item in items:
-        artifact_paths += [item["svg"], item["png"], item["jpg"]]
-    artifact_paths += [pack_dir / "meta.json", pack_dir / "entry.md"]
-    manifest = _build_manifest(
-        state, run_dir, _collect_artifacts(artifact_paths, run_dir)
-    )
-    manifest_path = core_artifacts.write_manifest(run_dir, manifest)
-
-    return {
-        "entry": {
-            "dir": str(pack_dir),
-            "items": items,
-            "meta": str(pack_dir / "meta.json"),
-            "manifest": str(manifest_path),
-            "manifest_digest": core_artifacts.manifest_digest(manifest),
-        },
-        "status": "packed",
-    }
+    run_dir.mkdir(parents=True, exist_ok=True)
+    profile = profiles_base.profile_for_spec(spec)
+    ctx = _profile_context(run_dir)
+    entry = profile.pack(items, spec, {**state, "profile_ctx": ctx})
+    return {"entry": entry, "status": "packed"}
 
 
-def _card_mockup(page: Path, out: Path, label: str) -> None:
-    from PIL import Image, ImageDraw, ImageFilter
-
-    canvas_size = (1400, 900)
-    canvas = Image.new("RGB", canvas_size, (239, 237, 232))
-    draw = ImageDraw.Draw(canvas)
-    card = (150, 110, 1250, 750)
-    shadow = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
-    ImageDraw.Draw(shadow).rounded_rectangle(
-        (card[0] + 6, card[1] + 18, card[2] + 6, card[3] + 18),
-        radius=18,
-        fill=(0, 0, 0, 60),
-    )
-    canvas.paste(
-        Image.alpha_composite(
-            canvas.convert("RGBA"), shadow.filter(ImageFilter.GaussianBlur(14))
-        ).convert("RGB"),
-        (0, 0),
-    )
-    draw.rounded_rectangle(
-        card, radius=14, fill=(255, 255, 255), outline=(220, 216, 208), width=2
-    )
-
-    with Image.open(page) as image:
-        inner = (card[0] + 28, card[1] + 28, card[2] - 28, card[3] - 28)
-        fitted = image.convert("RGB")
-        ratio = min(inner[2] - inner[0], inner[3] - inner[1]) / max(
-            fitted.width, fitted.height
-        )
-        size = (max(1, int(fitted.width * ratio)), max(1, int(fitted.height * ratio)))
-        fitted = fitted.resize(size, Image.LANCZOS)
-        x = inner[0] + ((inner[2] - inner[0]) - size[0]) // 2
-        y = inner[1] + ((inner[3] - inner[1]) - size[1]) // 2
-        canvas.paste(fitted, (x, y))
-
-    if label:
-        draw.text((150, 800), label[:80], fill=(60, 58, 54))
-    canvas.save(out, "PNG", optimize=True)
-
-
-def _poster_mockup(page: Path, out: Path) -> None:
-    from PIL import Image, ImageFilter
-
-    canvas = Image.new("RGB", (1400, 900), (214, 209, 200))
-    frame = (300, 70, 1100, 830)
-    with Image.open(page) as image:
-        fitted = image.convert("RGB")
-        ratio = min(frame[2] - frame[0], frame[3] - frame[1]) / max(
-            fitted.width, fitted.height
-        )
-        size = (max(1, int(fitted.width * ratio)), max(1, int(fitted.height * ratio)))
-        fitted = fitted.resize(size, Image.LANCZOS)
-        x = frame[0] + ((frame[2] - frame[0]) - size[0]) // 2
-        y = frame[1] + ((frame[3] - frame[1]) - size[1]) // 2
-        canvas.paste(fitted, (x, y))
-    canvas.save(out, "PNG", optimize=True)
+def _mockup_paths(mock: Dict[str, Any]) -> List[str]:
+    """목업 항목에서 실제 이미지 경로만 꺼낸다(web의 card/poster, print의 flat/pouch)."""
+    suffix = {".png", ".jpg", ".jpeg", ".svg"}
+    return [
+        value
+        for value in mock.values()
+        if isinstance(value, str) and Path(value).suffix.lower() in suffix
+    ]
 
 
 def mockup_node(state: EntryState) -> Dict[str, Any]:
-    """선택된 엔트리 상위 N개로 평면 목업을 만든다(Pillow, 결정론)."""
+    """선택된 엔트리 상위 N개로 평면 목업을 만든다(profile에 위임)."""
     entry = state.get("entry") or {}
     items = entry.get("items") or []
     if not items:
@@ -790,27 +501,15 @@ def mockup_node(state: EntryState) -> Dict[str, Any]:
     mock_dir = run_dir / "mockups"
     mock_dir.mkdir(parents=True, exist_ok=True)
 
-    mockups = []
-    for item in items[:limit]:
-        card = mock_dir / f"{item['id']}-card.png"
-        _card_mockup(Path(item["png"]), card, item.get("direction") or item["id"])
-        poster = mock_dir / f"{item['id']}-poster.png"
-        _poster_mockup(Path(item["png"]), poster)
-        mockups.append(
-            {
-                "id": item["id"],
-                "card": str(card),
-                "poster": str(poster),
-                "card_sha256": core_artifacts.sha256_file(card),
-            }
-        )
+    profile = profiles_base.profile_for_spec(spec)
+    mockups = profile.mockups(items[:limit], {**spec, "mockup_dir": str(mock_dir)})
 
     manifest_path = entry.get("manifest")
     if manifest_path and Path(manifest_path).is_file():
         manifest = core_artifacts.read_manifest(manifest_path)
         known = {row.get("path") for row in manifest.get("artifacts") or []}
         rows = list(manifest.get("artifacts") or [])
-        for path in [p for m in mockups for p in (m["card"], m["poster"])]:
+        for path in [p for mock in mockups for p in _mockup_paths(mock)]:
             row = _artifact_entry(path, Path(manifest_path).parent)
             if row is not None and row["path"] not in known:
                 rows.append(row)
