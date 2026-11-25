@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """LangGraph 서버 원격 제어 CLI — Kimaki/Discord에서 그래프를 실행하고 HITL을 승인한다.
 
-서버(:8123)의 HTTP API만 쓴다. 그래프 코드를 import하지 않으므로, Kimaki가 어느
-디렉터리에서 실행되든 동작한다.
+서버(:8123)의 HTTP API만 쓴다. 그래프 모듈은 import하지 않으므로, Kimaki가 어느
+디렉터리에서 실행되든 동작한다. 원장 조회(`runs`·`show`)는 manifest를 읽기 위해
+표준 라이브러리만 쓰는 `graphs.core.artifacts`만 가져온다.
 
 사용 예
     python3 scripts/graph_cli.py list
@@ -11,6 +12,8 @@
     python3 scripts/graph_cli.py status <thread_id>
     python3 scripts/graph_cli.py approve <thread_id> --graph copywriting_craft \
         --values '{"selected_option_index":1}' --wait
+    python3 scripts/graph_cli.py runs --limit 10
+    python3 scripts/graph_cli.py show <thread_id>
 
 환경 변수
     LANGGRAPH_URL   서버 주소 (기본 http://127.0.0.1:8123)
@@ -23,9 +26,31 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from graphs.core import artifacts  # noqa: E402  (저장소 루트의 core만 읽는다)
 
 BASE = os.environ.get("LANGGRAPH_URL", "http://127.0.0.1:8123").rstrip("/")
 TERMINAL = {"success", "error", "failed", "interrupted", "timeout"}
+
+#: 상태에서 manifest 경로로 볼 키. 값은 문자열·문자열 목록·`{"path": ...}` 모두 가능.
+MANIFEST_KEYS = frozenset(
+    {
+        "manifest",
+        "manifests",
+        "manifest_path",
+        "manifest_paths",
+        "manifest_file",
+        "manifest_files",
+        "run_manifest",
+        "artifacts_manifest",
+    }
+)
 
 
 def _request(method, path, payload=None, timeout=120):
@@ -60,6 +85,191 @@ def _latest_run(thread_id):
     return runs[0] if runs else {}
 
 
+def _first_present(*values):
+    """처음으로 비어 있지 않은 값. 없으면 None."""
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def short_time(value):
+    """시각을 `YYYY-MM-DDTHH:MM:SSZ`(UTC)로 줄인다. 못 읽으면 원문 그대로 둔다."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        seconds = value / 1000 if abs(value) > 1e11 else value  # 밀리초도 받아준다
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(seconds))
+    text = str(value)
+    iso = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        stamp = datetime.fromisoformat(iso)
+    except ValueError:
+        return text
+    if stamp.tzinfo is not None:
+        stamp = stamp.astimezone(timezone.utc).replace(tzinfo=None)
+    return stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def ledger_row(thread, latest_run=None):
+    """스레드(+마지막 실행) 하나를 원장 한 줄로 정규화한다."""
+    thread = thread or {}
+    latest_run = latest_run or {}
+    metadata = thread.get("metadata") or {}
+    return {
+        "thread_id": _first_present(thread.get("thread_id"), thread.get("id")),
+        "graph_id": _first_present(
+            metadata.get("graph_id"),
+            metadata.get("assistant_id"),
+            thread.get("graph_id"),
+            thread.get("assistant_id"),
+            latest_run.get("assistant_id"),
+        ),
+        "status": _first_present(thread.get("status"), latest_run.get("status")),
+        "created_at": short_time(
+            _first_present(
+                thread.get("created_at"),
+                thread.get("updated_at"),
+                latest_run.get("created_at"),
+            )
+        ),
+    }
+
+
+def ledger_rows(threads, limit=None):
+    """스레드 목록 → 최신순 원장. `limit`이 있으면 그만큼만 남긴다."""
+    rows = [ledger_row(thread) for thread in threads or ()]
+    rows.sort(
+        key=lambda row: (row.get("created_at") or "", row.get("thread_id") or ""),
+        reverse=True,
+    )
+    if limit and limit > 0:
+        return rows[:limit]
+    return rows
+
+
+def _table(headers, rows):
+    """열 폭을 맞춘 평문 표."""
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for index, cell in enumerate(row):
+            widths[index] = max(widths[index], len(cell))
+    lines = ["  ".join(h.ljust(w) for h, w in zip(headers, widths)).rstrip()]
+    for row in rows:
+        lines.append("  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip())
+    return "\n".join(lines)
+
+
+def format_ledger(rows):
+    """원장 표. 비어 있으면 사람이 읽을 수 있는 한 줄."""
+    if not rows:
+        return "실행 기록 없음"
+    body = [
+        [
+            row.get("thread_id") or "-",
+            row.get("graph_id") or "-",
+            row.get("status") or "-",
+            row.get("created_at") or "-",
+        ]
+        for row in rows
+    ]
+    return _table(("thread_id", "graph", "status", "created"), body)
+
+
+def _looks_like_manifest_path(text):
+    """공백 없는 문자열이 `manifest.json`으로 끝나면 경로로 본다(산문 제외)."""
+    if not text or any(char.isspace() for char in text):
+        return False
+    return text.replace("\\", "/").rstrip("/").endswith("manifest.json")
+
+
+def manifest_paths_from_values(values):
+    """상태 값 어디에 있든 manifest 경로를 모은다(중첩·목록 포함, 순서 유지)."""
+    found = []
+
+    def add(value):
+        if not isinstance(value, str):
+            return
+        candidate = value.strip()
+        if candidate and candidate not in found:
+            found.append(candidate)
+
+    def walk(node, depth=0):
+        if depth > 20:
+            return
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if str(key).lower() in MANIFEST_KEYS:
+                    items = value if isinstance(value, (list, tuple, set)) else [value]
+                    for item in items:
+                        if isinstance(item, dict):
+                            add(item.get("path") or item.get("manifest_path"))
+                        else:
+                            add(item)
+                walk(value, depth + 1)
+        elif isinstance(node, (list, tuple, set)):
+            for item in node:
+                walk(item, depth + 1)
+        elif isinstance(node, str) and _looks_like_manifest_path(node):
+            add(node)
+
+    walk(values)
+    return found
+
+
+def manifest_report(paths):
+    """manifest 경로별 존재 여부·파일 sha256·manifest 지문·요약."""
+    rows = []
+    for raw in paths:
+        path = Path(str(raw)).expanduser()
+        row = {"path": str(path), "exists": False}
+        rows.append(row)
+        if not path.exists():
+            continue
+        row["exists"] = True
+        try:
+            manifest = artifacts.read_manifest(path)
+            manifest_path = (
+                path if path.suffix == ".json" else path / artifacts.MANIFEST_NAME
+            )
+            row["manifest_path"] = str(manifest_path)
+            row["sha256"] = artifacts.sha256_file(manifest_path)
+            row["digest"] = artifacts.manifest_digest(manifest)
+        except (OSError, ValueError) as exc:
+            row["error"] = f"{type(exc).__name__}: {exc}"
+            continue
+        row["run_id"] = manifest.get("run_id")
+        row["kind"] = manifest.get("kind")
+        row["status"] = manifest.get("status")
+        row["artifacts"] = len(manifest.get("artifacts") or ())
+    return rows
+
+
+def format_manifests(rows):
+    """manifest 목록을 사람이 읽는 형태로. 없으면 `manifest 없음`."""
+    if not rows:
+        return "manifest 없음"
+    lines = []
+    for row in rows:
+        lines.append(row["path"])
+        if not row.get("exists"):
+            lines.append("  파일 없음")
+            continue
+        if row.get("error"):
+            lines.append(f"  읽기 실패: {row['error']}")
+            continue
+        lines.append(f"  sha256: {row.get('sha256')}")
+        lines.append(f"  digest: {row.get('digest')}")
+        lines.append(
+            "  kind: {}  status: {}  artifacts: {}".format(
+                row.get("kind") or "-",
+                row.get("status") or "-",
+                row.get("artifacts") or 0,
+            )
+        )
+    return "\n".join(lines)
+
+
 def _wait(thread_id, timeout=180, interval=3):
     """실행이 끝나거나 HITL에서 멈출 때까지 기다린다.
 
@@ -79,15 +289,22 @@ def _wait(thread_id, timeout=180, interval=3):
     return _state(thread_id), _latest_run(thread_id)
 
 
-def _print_summary(thread_id, state, run, as_json=False):
-    next_nodes = state.get("next") or []
-    values = state.get("values") or {}
-    summary = {
+def state_summary(thread_id, state, run):
+    """스레드 상태 요약 — `status`·`show` 공통."""
+    state = state or {}
+    values = state.get("values") if isinstance(state.get("values"), dict) else {}
+    return {
         "thread_id": thread_id,
-        "run_status": run.get("status"),
-        "next": next_nodes,
+        "run_status": (run or {}).get("status"),
+        "next": state.get("next") or [],
         "status": values.get("status"),
     }
+
+
+def _print_summary(thread_id, state, run, as_json=False):
+    summary = state_summary(thread_id, state, run)
+    next_nodes = summary["next"]
+    values = (state or {}).get("values") or {}
     if as_json:
         print(
             json.dumps(
@@ -172,13 +389,57 @@ def cmd_approve(args):
 
 
 def cmd_runs(args):
-    runs = _runs(args.thread_id)
-    print(
-        json.dumps(
-            [{"run_id": r.get("run_id"), "status": r.get("status")} for r in runs],
-            ensure_ascii=False,
+    # 하위 호환: `runs <thread_id>`는 예전처럼 그 스레드의 실행 이력만 보여준다.
+    if getattr(args, "thread_id", None):
+        runs = _runs(args.thread_id)
+        print(
+            json.dumps(
+                [{"run_id": r.get("run_id"), "status": r.get("status")} for r in runs],
+                ensure_ascii=False,
+            )
         )
-    )
+        return
+    limit = max(1, int(getattr(args, "limit", 10)))
+    rows = ledger_rows(_search_threads(limit), limit)
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False))
+        return
+    print(format_ledger(rows))
+
+
+def _search_threads(limit):
+    """최근 스레드를 최신순으로. 정렬 인자를 모르는 서버면 limit만 보낸다."""
+    payload = {"limit": limit, "sort_by": "thread_id", "sort_order": "desc"}
+    try:
+        threads = _request("POST", "/threads/search", payload)
+    except SystemExit:
+        threads = _request("POST", "/threads/search", {"limit": limit})
+    return threads or []
+
+
+def cmd_show(args):
+    state = _state(args.thread_id)
+    run = _latest_run(args.thread_id)
+    values = (state or {}).get("values")
+    manifests = manifest_report(manifest_paths_from_values(values))
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "summary": state_summary(args.thread_id, state, run),
+                    "values": values,
+                    "manifests": manifests,
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+        return
+    for key, value in state_summary(args.thread_id, state, run).items():
+        if isinstance(value, (list, dict)):
+            value = json.dumps(value, ensure_ascii=False, default=str)
+        print(f"{key}: {value}")
+    print(format_manifests(manifests))
 
 
 def main(argv=None):
@@ -214,9 +475,26 @@ def main(argv=None):
     p.add_argument("--timeout", type=int, default=180, help="대기 시간(초)")
     p.set_defaults(func=cmd_approve)
 
-    p = sub.add_parser("runs", help="스레드 실행 이력")
-    p.add_argument("thread_id")
+    p = sub.add_parser("runs", help="최근 실행 원장 (thread_id를 주면 그 스레드 이력)")
+    p.add_argument("thread_id", nargs="?", help="있으면 그 스레드의 실행 이력")
+    p.add_argument("--limit", type=int, default=10, help="최근 N개 (기본 10)")
+    p.add_argument(
+        "--json",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="JSON으로 출력",
+    )
     p.set_defaults(func=cmd_runs)
+
+    p = sub.add_parser("show", help="스레드 상태 + 산출 manifest")
+    p.add_argument("thread_id")
+    p.add_argument(
+        "--json",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="JSON으로 출력",
+    )
+    p.set_defaults(func=cmd_show)
 
     args = parser.parse_args(argv)
     if args.url:
