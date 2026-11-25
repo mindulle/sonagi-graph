@@ -787,3 +787,346 @@ def test_brand_runs_through_entry_pack_nodes(tmp_path, monkeypatch):
 
     mocked = entry.mockup_node({"spec": state["spec"], "entry": packed["entry"]})
     assert mocked["mockups"] and Path(mocked["mockups"][0]["card"]).is_file()
+
+
+# ---------------------------------------------------------------------------
+# context_test — 여러 크기 렌더 + 구조 검사 (GRAPH-21, logo_design 흡수)
+# ---------------------------------------------------------------------------
+
+CONTEXT_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" '
+    'viewBox="0 0 120 120">'
+    '<rect x="10" y="10" width="100" height="100" fill="#fbf9f5"/>'
+    '<circle cx="60" cy="60" r="40" fill="#161616"/>'
+    "</svg>"
+)
+
+
+def test_context_test_skips_when_no_mark():
+    result = brand_profile.context_test(None)
+    assert result["score"] == 100
+    assert result["skipped"] is True
+    assert result["sizes"] == {}
+
+
+def test_context_test_renders_all_sizes_and_scores(tmp_path):
+    result = brand_profile.context_test(
+        CONTEXT_SVG,
+        ctx=_ctx(tmp_path),
+        workdir=tmp_path / "ctx",
+    )
+
+    assert set(result["sizes"]) == {16, 32, 64, 256}
+    assert all(value == "ok" for value in result["sizes"].values())
+    assert result["checks"]["element_count"] == 2
+    assert result["checks"]["color_count"] == 2
+    assert result["checks"]["shape_preservation_iou"] >= 0.7
+    assert 0 <= result["score"] <= 100
+
+
+def test_context_test_penalizes_complex_mark(tmp_path):
+    svg = (
+        '<svg width="120" height="120" viewBox="0 0 120 120">'
+        + "".join(
+            f'<rect x="{i}" y="0" width="2" height="120" fill="#161616"/>'
+            for i in range(24)
+        )
+        + "</svg>"
+    )
+    result = brand_profile.context_test(
+        svg, ctx=_ctx(tmp_path), workdir=tmp_path / "ctx"
+    )
+
+    assert any("너무 복잡" in issue for issue in result["issues"])
+    assert result["score"] < 100
+
+
+def test_context_test_flags_viewbox_and_thin_strokes(tmp_path):
+    svg = (
+        '<svg width="120" height="80" viewBox="0 0 120 80">'
+        '<rect x="1" y="1" width="40" height="40" fill="#161616" stroke-width="1"/>'
+        '<circle cx="60" cy="40" r="20" fill="#161616"/>'
+        "</svg>"
+    )
+    result = brand_profile.context_test(
+        svg, ctx=_ctx(tmp_path), workdir=tmp_path / "ctx"
+    )
+
+    assert any("비정사각" in issue for issue in result["issues"])
+    assert any("stroke-width 1.0" in issue for issue in result["issues"])
+
+
+def test_context_test_reports_render_failures(tmp_path):
+    def broken(args, timeout=300, **kwargs):
+        raise FileNotFoundError("vectorcraft-cli: command not found")
+
+    result = brand_profile.context_test(
+        CONTEXT_SVG,
+        ctx=base.ProfileContext(run=broken, run_dir=tmp_path / "run"),
+        workdir=tmp_path / "ctx",
+    )
+
+    assert all(str(value).startswith("error") for value in result["sizes"].values())
+    assert result["score"] <= 20
+
+
+def test_context_test_honours_custom_sizes_and_clears_stale_renders(tmp_path):
+    work = tmp_path / "ctx"
+    first = brand_profile.context_test(
+        CONTEXT_SVG, ctx=_ctx(tmp_path), workdir=work, sizes=(32, 64)
+    )
+    assert set(first["sizes"]) == {32, 64}
+    assert "shape_preservation_iou" in first["checks"]
+
+    def broken(args, timeout=300, **kwargs):
+        raise FileNotFoundError("gone")
+
+    # 64만 요청하면 이전 16/256 렌더를 재사용하지 않는다(파일을 지우고 다시 만든다).
+    second = brand_profile.context_test(
+        CONTEXT_SVG,
+        ctx=base.ProfileContext(run=broken, run_dir=tmp_path / "run"),
+        workdir=work,
+        sizes=(64,),
+    )
+    assert set(second["sizes"]) == {64}
+    assert "shape_preservation_iou" not in second["checks"]
+
+
+def test_context_test_accepts_shorthand_colors_and_single_path(tmp_path):
+    svg = (
+        '<svg width="120" height="120" viewBox="0,0,120,120">'
+        '<path fill="#fff" d="M10 10h100v100h-100z"/>'
+        "</svg>"
+    )
+    result = brand_profile.context_test(
+        svg, ctx=_ctx(tmp_path), workdir=tmp_path / "ctx"
+    )
+
+    assert result["checks"]["color_count"] == 1
+    assert not any("색상 없음" in issue for issue in result["issues"])
+    assert not any("형태가 없음" in issue for issue in result["issues"])
+    assert not any("viewBox" in issue for issue in result["issues"])
+
+
+# ---------------------------------------------------------------------------
+# critic — context 점수 + 렌더 실패 감점
+# ---------------------------------------------------------------------------
+
+
+def test_critic_score_applies_craft_failure_penalty():
+    assert brand_profile.critic_score(85) == 85
+    assert brand_profile.critic_score(85, craft_failed=True) == 65
+    assert brand_profile.critic_score(5, craft_failed=True) == 0
+    assert brand_profile.critic_score(85, craft_failed=True, penalty=10) == 75
+
+
+def test_critic_score_stays_within_bounds():
+    assert brand_profile.critic_score(120) == 100
+    assert brand_profile.critic_score(-5) == 0
+    # 음수 감점은 점수를 올리지 않는다.
+    assert brand_profile.critic_score(80, craft_failed=True, penalty=-50) == 80
+
+
+# ---------------------------------------------------------------------------
+# print_prep — 인쇄 사양 검사
+# ---------------------------------------------------------------------------
+
+
+def test_print_prep_skips_without_spec():
+    result = brand_profile.print_prep(None)
+    assert result["ok"] is True
+    assert result["skipped"] is True
+    assert "건너뜀" in result["report"]
+
+
+def test_print_prep_reports_missing_cmyk_profile():
+    result = brand_profile.print_prep(
+        {"bleed_mm": 3, "cmyk": True},
+        variants=[{"id": "v1"}],
+        mark_source="none",
+    )
+    assert result["ok"] is False
+    assert "CMYK" in result["report"]
+    assert result["issues"]
+
+
+def test_print_prep_passes_with_full_spec():
+    result = brand_profile.print_prep(
+        {"bleed_mm": 3, "cmyk": True, "cmyk_profile": "ISO Coated v2"},
+        variants=[{"id": "v1"}],
+        mark_source="none",
+    )
+    assert result["ok"] is True
+    assert result["issues"] == []
+
+
+def test_print_prep_collects_every_problem_at_once():
+    result = brand_profile.print_prep(
+        {"bleed_mm": 1, "cmyk": True},
+        variants=[],
+        craft_status="error: renderer missing",
+        mark_source="existing",
+        mark_locked=False,
+    )
+    assert result["ok"] is False
+    joined = " ".join(result["issues"])
+    assert "asset 렌더 실패" in joined
+    assert "bleed 1mm" in joined
+    assert "CMYK" in joined
+    assert "마크가 잠기지 않았습니다" in joined
+
+
+def test_print_prep_rejects_non_numeric_bleed_and_string_lock():
+    result = brand_profile.print_prep(
+        {"bleed_mm": "3mm", "cmyk": True, "cmyk_profile": "ISO Coated v2"},
+        variants=[{"id": "v1"}],
+        mark_source="existing",
+        mark_locked="false",
+    )
+    assert result["ok"] is False
+    joined = " ".join(result["issues"])
+    assert "숫자가 아니다" in joined
+    # 문자열 "false"는 잠금으로 인정하지 않는다(brand 게이트와 같은 규칙).
+    assert "마크가 잠기지 않았습니다" in joined
+
+
+# ---------------------------------------------------------------------------
+# series — N건 배치 모드 (GRAPH-21, package_series 흡수)
+# ---------------------------------------------------------------------------
+
+
+def test_series_lock_mark_reads_existing_svg(tmp_path):
+    mark = _mark(tmp_path)
+    result = brand_profile.series_lock_mark(
+        {"mark_source": "existing", "mark_path": str(mark)}
+    )
+    assert result["status"] == "mark_locked"
+    assert result["mark_svg"] == MARK_SVG
+
+    assert brand_profile.series_lock_mark({"mark_svg": "<svg/>"})["status"] == (
+        "mark_already_locked"
+    )
+    assert brand_profile.series_lock_mark({"mark_source": "none"})["status"] == (
+        "mark_skipped"
+    )
+    with pytest.raises(ValueError):
+        brand_profile.series_lock_mark(
+            {"mark_source": "existing", "mark_path": str(tmp_path / "nope.svg")}
+        )
+
+
+def test_series_plan_normalizes_names_and_requires_items():
+    plan = brand_profile.series_plan(
+        [{"print_spec": {"bleed_mm": 3}}, {"name": "라벨"}]
+    )
+    assert [row["name"] for row in plan] == ["deliverable-0", "라벨"]
+    assert plan[0]["print_spec"] == {"bleed_mm": 3}
+    assert plan[1]["index"] == 1
+    with pytest.raises(base.ProfileError):
+        brand_profile.series_plan([])
+
+
+def test_series_step_records_result_and_advances_index(tmp_path):
+    state = {
+        "brief": "민들레 세트",
+        "deliverables": [
+            {"name": "박스", "print_spec": {"bleed_mm": 3}},
+            {"name": "라벨"},
+        ],
+        "spec": {"profile": "brand"},
+        "mark_source": "existing",
+        "mark_path": str(_mark(tmp_path)),
+        "mark_svg": "<svg/>",
+        "current_index": 0,
+    }
+    seen = []
+
+    def deliver(payload):
+        seen.append(payload)
+        return {"status": "delivered", "print_ok": True}
+
+    result = brand_profile.series_step(state, deliver)
+    assert result["current_index"] == 1
+    assert result["status"] == "delivered_박스"
+    assert result["results"][0]["name"] == "박스"
+    assert result["results"][0]["index"] == 0
+    assert seen[0]["brief"] == "민들레 세트 — 박스"
+    assert seen[0]["mark_source"] == "existing"
+    assert seen[0]["approval_status"] == "approved"
+    # entry_pack에 그대로 넘길 수 있게 spec 템플릿 + 항목 print_spec을 싣는다.
+    assert seen[0]["spec"]["profile"] == "brand"
+    assert seen[0]["spec"]["print_spec"] == {"bleed_mm": 3}
+    assert seen[0]["deliverable"]["name"] == "박스"
+
+    done = brand_profile.series_step(
+        {**state, "current_index": 2, "results": result["results"]}, deliver
+    )
+    assert done["status"] == "all_delivered"
+    assert len(seen) == 1  # 끝난 뒤에는 deliver를 다시 부르지 않는다
+
+
+def test_series_hitl_resets_approval_and_names_the_item(tmp_path):
+    state = {"current_index": 1, "deliverables": [{"name": "박스"}]}
+    pending = brand_profile.series_hitl(state)
+    assert pending["approval_status"] == "pending"
+    assert pending["status"] == "awaiting_approval_박스"
+
+    approved = brand_profile.series_hitl({**state, "approval_status": "approved"})
+    assert approved == {"status": "approved", "approval_status": "pending"}
+
+
+def test_series_next_routes_after_each_approval():
+    base_state = {
+        "status": "approved",
+        "current_index": 1,
+        "deliverables": [{"name": "a"}, {"name": "b"}],
+    }
+    assert brand_profile.series_next(base_state) == "deliver_one"
+    assert brand_profile.series_next({**base_state, "current_index": 2}) == (
+        "publish_all"
+    )
+    assert brand_profile.series_next(
+        {**base_state, "status": "awaiting_approval_a"}
+    ) == (brand_profile.SERIES_STOP)
+
+
+def test_series_publish_summarizes_results():
+    rows = [
+        {"name": "박스", "status": "delivered_박스"},
+        {"name": "라벨", "status": "delivered_라벨"},
+    ]
+    assert brand_profile.series_publish(rows) == [
+        "박스: delivered_박스",
+        "라벨: delivered_라벨",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# review — context_test + critic + print_prep 묶음 (profile 공개 API)
+# ---------------------------------------------------------------------------
+
+
+def test_brand_profile_review_combines_checks(tmp_path):
+    profile = base.get_profile("brand")
+    result = profile.review(
+        CONTEXT_SVG,
+        ctx=_ctx(tmp_path),
+        workdir=tmp_path / "ctx",
+        print_spec={"bleed_mm": 3, "cmyk": True},
+        variants=[{"id": "v1"}],
+        mark_source="existing",
+        mark_locked=True,
+    )
+
+    assert 0 <= result["context"]["score"] <= 100
+    assert result["score"] == result["context"]["score"]
+    assert result["print"]["ok"] is False
+    assert any("CMYK" in issue for issue in result["print"]["issues"])
+
+
+def test_brand_profile_review_skips_checks_without_mark_or_spec():
+    profile = base.get_profile("brand")
+    result = profile.review(None)
+    assert result["context"]["skipped"] is True
+    assert result["score"] == 100
+    assert result["print"]["skipped"] is True

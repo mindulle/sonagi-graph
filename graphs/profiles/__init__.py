@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from graphs.profiles.base import (
     DEFAULT_PROFILE,
+    ConceptDirection,
+    ConceptOutput,
     Gate,
     Profile,
     ProfileContext,
@@ -38,6 +40,8 @@ register(BrandProfile())
 __all__ = [
     "BrandGateError",
     "BrandProfile",
+    "ConceptDirection",
+    "ConceptOutput",
     "DEFAULT_PROFILE",
     "Gate",
     "PrintGateError",

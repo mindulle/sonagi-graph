@@ -266,7 +266,7 @@ def knowledge_node(state: EntryState) -> Dict[str, Any]:
 
 def direction_node(state: EntryState) -> Dict[str, Any]:
     """LLM으로 서로 다른 시각 방향 3~5개를 만든다."""
-    from graphs.logo_design_graph import ConceptDirection, ConceptOutput
+    from graphs.profiles.base import ConceptOutput
 
     spec = state.get("spec") or {}
     ir = state.get("ir") or craft.parse_brief(state.get("brief", ""))

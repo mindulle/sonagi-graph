@@ -11,8 +11,8 @@ description: >
 
 사용자가 Discord에서 다음 중 하나를 요청할 때:
 - "이 에러 분석해줘" / "에러 트리아지" → `error_triage`
-- "로고 만들어줘" / "마크 생성" → `logo_design`
-- "패키지 3건 납품" → `package_series`
+- "로고/브랜드 마크 납품해줘" → `entry_pack` (`spec.profile="brand"`, `mark_path` 필수)
+- "패키지 납품" → `entry_pack` (`spec.profile="print"` 또는 `"brand"`)
 - "카피 써줘" → `copywriting_craft`
 - "글 검증해줘" → `editorial_verification`
 - "디자인 검증" → `visual_consistency`
@@ -50,8 +50,8 @@ python3 scripts/graph_cli.py status <thread_id>
 | 그래프 | 입력 |
 |---|---|
 | `error_triage` | `{"messages":[{"role":"user","content":"에러 로그"}]}` |
-| `logo_design` | `{"brief":"브랜드명","mark_source":"existing","mark_path":"/path/to/mark.svg","concept":"여백을 살린 모노그램","content":"/path/to/brief.md"}` |
 | `entry_pack` | `{"brief":"핸드메이드 티 랜딩 — 차분한, 웹","spec":{"platform":"99designs","themes":["light","dark"],"variant_cap":12}}` |
+| `entry_pack` (brand) | `{"brief":"브랜드","spec":{"profile":"brand","brand":{"mark_path":"/path/to/mark.svg","palette":{"ink":"#161616"}}}}` |
 | `copywriting_craft` | `{"scene_id":"Act 1","raw_draft":"초안","context":"맥락"}` |
 | `editorial_verification` | `{"title":"제목","content":"본문","target_stance":"관점"}` |
 | `visual_consistency` | `{"project_name":"프로젝트","vectors":[...],"motions":[...],"imagery":[...]}` |
@@ -61,8 +61,8 @@ python3 scripts/graph_cli.py status <thread_id>
 
 - `LANGGRAPH_URL` 기본값: `http://127.0.0.1:8123` (배포 서버)
 - 네트워크 호출이 있는 그래프(research, knowledge_harvester)는 60~120초 걸릴 수 있다
-- `skip_research=True`로 research를 건너뛸 수 있다 (logo_design)
-- `skip_vision=True`로 LLM vision 체크를 건너뛸 수 있다 (logo_design)
+- `skip_knowledge=True`로 레퍼런스 수집을, `skip_llm=True`로 방향 생성을 건너뛸 수 있다 (entry_pack)
+- brand profile은 기본값이 오프라인이다(`skip_knowledge`·`skip_llm`, 마크는 `mark_path`만 읽는다)
 
 ## HITL 승인 패턴
 

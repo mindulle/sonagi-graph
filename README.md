@@ -14,21 +14,23 @@ Sonagi 생태계의 다양한 에이전틱 그래프(Agentic Graphs)를 정의�
 
 | 그래프 | 파일 | 하는 일 | 외부 의존 | HITL |
 | --- | --- | --- | --- | --- |
-| `spike_test` | `graphs/spike_test_graph.py` | LangGraph 배선 확인용 최소 그래프 | 없음 | – |
 | `error_triage` | `graphs/error_triage_graph.py` | 센트리 오류 트리아지 | LLM 프록시 | – |
 | `market_intelligence` | `graphs/market_intelligence_graph.py` | 시장 신호 수집·분석 → DB 적재 | LLM 프록시, `requests` | `loader` 직전 |
 | `design_ops` | `graphs/design_ops_graph.py` | ArtCraft 시안 3안 → 선택 | `vectorcraft-cli` | `publish` 직전 |
-| `asset_craft` | `graphs/asset_craft_graph.py` | 브리프 → 렌더 후보 3안 | 크래프트 CLI, `sonagi-assets` | `select` 직전 |
 | `design_token_sync` | `graphs/design_token_sync_graph.py` | 토큰 정본 → 소비처 컴파일 | `sonagi-assets`, MDS | 승인 게이트 |
 | `video_ops` | `graphs/video_ops_graph.py` | EffectCraft 모션 + FilmCraft 컷편집 → CDN | `effectcraft-cli`, `filmcraft-cli` | `export_and_publish` 직전 |
 | `editorial_verification` | `graphs/editorial_verification_graph.py` | 학술·논리·미학·다이어그램 4대 크리틱 → 판정 | LLM 프록시 | `vault_loader` 직전 |
 | `visual_consistency` | `graphs/visual_consistency_graph.py` | 벡터·모션·이미지 3대 크리틱 → 판정 | LLM 프록시 | `vault_loader` 직전 |
-| `entry_pack` | `graphs/entry_pack_graph.py` | 브리프 → 지식(SearXNG·위키) → 방향 → 변주(N) → 렌더·린트 → 선택(HITL) → PNG/JPG·목업 | `sonagi-assets` 렌더러, `SearXNG`, LLM | `hitl` 직전 |
+| `entry_pack` | `graphs/entry_pack_graph.py` | 브리프 → 지식(SearXNG·위키) → 방향 → 변주(N) → 렌더·린트 → 선택(HITL) → PNG/JPG·목업. `spec.profile`로 web/print/brand 선택 | `sonagi-assets` 렌더러, `SearXNG`, LLM | `hitl` 직전 |
 | `copywriting_craft` | `graphs/copywriting_craft_graph.py` | 클리셰 필터 → 오감 주입 → 카피 3안 | LLM 프록시 | `hitl_checkpoint` 직전 |
 | `knowledge_harvester` | `graphs/knowledge_harvester_graph.py` | 공공 오픈 데이터 6곳 → 위키 카탈로그 | 공개 API (키 불필요) | – |
 | `source_verification` | `graphs/source_verification_graph.py` | SearXNG 검색 → LLM 신뢰도 심사 → 볼트 | 로컬 `SearXNG`, LLM 프록시 | `loader` 직전 |
-| `logo_design` | `graphs/logo_design_graph.py` | Concept(LLM 방향) → asset craft(레이아웃) → context_test(결정론) → refine(루프) → 인쇄 준비 → HITL | `sonagi-assets` (마크 SVG는 편집 도구에서) | `hitl` 직전 |
-| `package_series` | `graphs/package_series_graph.py` | 마크 1회 로드 → N개 패키지 순차 생성 → 각각 HITL → 일괄 납품 | `sonagi-assets` (마크 SVG는 편집 도구에서) | `series_hitl` 직전 |
+
+브랜드 마크·패키지 시리즈는 독립 그래프가 아니라 `entry_pack`의 `brand` profile
+(`spec.profile="brand"`)이다. 렌더·린트 파이프라인은 `graphs/adapters/assets.py`가,
+마크 검토(context_test·critic·print_prep)와 시리즈 배치는
+`graphs/profiles/brand.py`의 `review()`·`series_*`가 맡는다
+(`docs/GRAPH_REGISTRY.md` §1·§5).
 
 ### 서버에서 실행하고 Kimaki로 승인하기
 
@@ -62,9 +64,9 @@ Kimaki 흐름:
 | 마운트 | 쓰는 그래프 |
 | --- | --- |
 | `/home/ubuntu/llm-wiki` | `editorial_verification`, `visual_consistency`, `knowledge_harvester`, `source_verification` |
-| `/home/ubuntu/sonagi-assets` | `design_ops`, `asset_craft`, `brand.py` |
+| `/home/ubuntu/sonagi-assets` | `design_ops`, `entry_pack`, `brand.py`, `adapters/assets.py` |
 | `mindulle-design-system/packages/tokens` | `design_token_sync` |
-| `/usr/local/bin/{filmcraft,effectcraft,vectorcraft}-cli` | `video_ops`, `design_ops`, `asset_craft` |
+| `/usr/local/bin/{filmcraft,effectcraft,vectorcraft}-cli` | `video_ops`, `design_ops`, `entry_pack` |
 | `/var/www/craft-suite` | `video_ops` CDN 배포 |
 
 ```bash
@@ -84,8 +86,8 @@ import하지 않으므로 Kimaki가 어느 디렉터리에서 실행되든 동�
 python3 scripts/graph_cli.py run error_triage --input '{"messages":[{"role":"user","content":"에러"}]}' --wait
 
 # HITL (그래프가 멈추면 thread_id가 출력된다)
-python3 scripts/graph_cli.py run logo_design --input '{"brief":"브랜드","mark_source":"generate"}' --wait
-python3 scripts/graph_cli.py approve <thread_id> --graph logo_design --values '{"approval_status":"approved"}' --wait
+python3 scripts/graph_cli.py run entry_pack --input '{"brief":"브랜드","spec":{"profile":"brand","brand":{"mark_path":"/path/mark.svg"}}}' --wait
+python3 scripts/graph_cli.py approve <thread_id> --graph entry_pack --values '{"approval_status":"approved"}' --wait
 ```
 
 상세 패턴은 `routines/graph-run.md`에 있다. Kimaki가 이 파일을 읽고 사용자 요청에
@@ -288,44 +290,49 @@ python3 figma_drift.py --file-key ... --json | jq .drift
 - 픽스처 `test_data/figma/snapshot_mindulle_2026-11-24.json`은 실서비스 파일에서 읽은
   Colors 29 + Color Primitives 43이다(값·별칭 사슬 실측, id는 합성).
 
-## Asset Craft (자연어 → 렌더 후보 → 사람 선택)
+## Asset 렌더 어댑터 (자연어 → 렌더 후보 → 사람 선택)
 
-`graphs/asset_craft_graph.py`는 브리프 한 줄로 렌더 후보 3개를 만들고, 결정론
-린터로 재고, 사람이 고른 뒤 결정 원장을 남긴다. LLM은 픽셀을 만지지 않는다.
+`graphs/adapters/assets.py`는 브리프 한 줄로 렌더 후보를 만들고, 결정론 린터로
+재고, 사람이 고를 후보와 결정 원장을 남긴다. LangGraph 배선은 호출부가 맡는다
+(독립 `asset_craft` 그래프는 GRAPH-21에서 흡수·폐기). LLM은 픽셀을 만지지 않는다.
 
 ```
-brief ──▶ scout ──▶ compose ──▶ render(변주 3) ──▶ critic ──▶ select ──▶ [사람] ──▶ approve
- IR        참고 자산     스타일 후보      SVG+manifest      lint 점수      상위 3안       원장
+content ─ import_content ─▶ recipe ─ render_variants ─▶ SVG+manifest
+                                            │
+                          lint_renders ◀────┘
+                                │
+                     top_options ─▶ 상위 3안 (FAIL 제외)
+                                │
+                     write_ledger ─▶ decisions.json
 ```
 
 ```python
-from graphs.asset_craft_graph import build_graph
+from graphs.adapters import assets
 
-graph = build_graph()
-config = {"configurable": {"thread_id": "craft-1"}}
-graph.invoke(
-    {"brief": "미니멀하고 차분한 랜딩. 금지: 네온",
-     "content": "/path/to/content.md"},
-    config,
+paths = assets.AssetPaths.from_env()
+result = assets.run_pipeline(
+    "/path/to/content.md",
+    variants,                    # craft.plan_variants(...) 결과
+    run_id="craft-1",
+    paths=paths,
 )
-# select에서 멈춘다. options를 보고 하나를 고른다.
-graph.update_state(config, {"selection": "minimal-desktop-light"})
-graph.invoke(None, config)
+result["options"]                # 사람에게 보여줄 후보
+assets.write_ledger(result["renders"][0], ["style=...: 판정 pass · 점수 100"])
 ```
 
 | 환경변수            | 기본                                     | 뜻                           |
 | ------------------- | ---------------------------------------- | ---------------------------- |
 | `SONAGI_ASSETS_DIR` | `/home/ubuntu/sonagi-assets`             | 렌더러·린터·명부가 있는 곳   |
 | `SONAGI_CATALOG`    | `<assets>/test_data/golden/catalog.json` | 자산 카탈로그                |
-| `SONAGI_CRAFT_OUT`  | `/tmp/asset_craft`                       | 변주 출력 루트               |
-| `SONAGI_CRAFT_REFS` | `8`                                      | 스카우트가 고를 참고 자산 수 |
+| `SONAGI_TOKENS`     | `<assets>/tokens/semantic.json`          | 린터가 쓰는 토큰             |
+| `SONAGI_CRAFT_OUT`  | `/tmp/asset_craft`                       | 변주 출력 루트(레거시 별칭)  |
 
 판단 로직은 `craft.py`에 있고 LangGraph에 의존하지 않는다(`test_craft.py`).
 
 - 톤 사전은 의도적으로 작다: 미니멀·스위스·고급·대담·편집·따뜻·차분
 - 스타일 점수 = 톤 가중치 × 축 가중치(palette 3 · type 2 · layout 2 · ornament 1)
 - 린트 점수 = 100 − 25×fail − 5×warn, 동점이면 브리프 적합도로 정렬
-- FAIL은 선택지에서 빠진다. 남는 후보가 없으면 그래프가 멈춘다
+- FAIL은 선택지에서 빠진다. 남는 후보가 없으면 `options`가 비고, 호출부가 사람 게이트에서 멈춘다
 - 레퍼런스는 `license_scope`가 `bundle`/`output`인 것만. `blocked`·junk는 제외
 - 스카우트 결과는 `scout` 결정으로 원장에 남는다(`8건 [illustration:3,icon:3,typography:2]: 이름, ...`)
 

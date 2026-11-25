@@ -43,6 +43,8 @@ from typing import (
     runtime_checkable,
 )
 
+from pydantic import BaseModel, Field
+
 from graphs.core import artifacts as core_artifacts
 from graphs.core import env as core_env
 from graphs.core import exec as core_exec
@@ -51,6 +53,31 @@ DEFAULT_PROFILE = "web"
 
 #: profile이 없을 때 안내에 쓰는 문구.
 SPEC_HINT = "spec['profile'] 또는 spec['contest_type']로 지정한다"
+
+
+class ConceptDirection(BaseModel):
+    """시각 방향 하나 — 마크·레이아웃을 그릴 수 있을 만큼 구체적으로."""
+
+    title: str = Field(
+        description="방향 이름 (예: '미니멀 모노그램', '네거티브 스페이스 동물')"
+    )
+    description: str = Field(description="1~2문장 설명")
+    motifs: List[str] = Field(
+        default_factory=list,
+        description="이 방향에서 쓸 형태 모티프 2~4개 (예: '겹친 이니셜', '원 안의 여백', '활자 압인')",
+    )
+    visual_language: str = Field(
+        default="",
+        description="선·면·질감·비례에 대한 구체적 지시 (편집 도구에서 그릴 수 있을 만큼)",
+    )
+
+
+class ConceptOutput(BaseModel):
+    """LLM 구조화 출력 — 서로 다른 시각 방향 3~5개."""
+
+    directions: List[ConceptDirection] = Field(
+        description="3~5개의 서로 다른 시각 방향"
+    )
 
 
 class ProfileError(ValueError):
