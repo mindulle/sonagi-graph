@@ -23,6 +23,7 @@ Sonagi 생태계의 다양한 에이전틱 그래프(Agentic Graphs)를 정의�
 | `video_ops` | `graphs/video_ops_graph.py` | EffectCraft 모션 + FilmCraft 컷편집 → CDN | `effectcraft-cli`, `filmcraft-cli` | `export_and_publish` 직전 |
 | `editorial_verification` | `graphs/editorial_verification_graph.py` | 학술·논리·미학·다이어그램 4대 크리틱 → 판정 | LLM 프록시 | `vault_loader` 직전 |
 | `visual_consistency` | `graphs/visual_consistency_graph.py` | 벡터·모션·이미지 3대 크리틱 → 판정 | LLM 프록시 | `vault_loader` 직전 |
+| `entry_pack` | `graphs/entry_pack_graph.py` | 브리프 → 지식(SearXNG·위키) → 방향 → 변주(N) → 렌더·린트 → 선택(HITL) → PNG/JPG·목업 | `sonagi-assets` 렌더러, `SearXNG`, LLM | `hitl` 직전 |
 | `copywriting_craft` | `graphs/copywriting_craft_graph.py` | 클리셰 필터 → 오감 주입 → 카피 3안 | LLM 프록시 | `hitl_checkpoint` 직전 |
 | `knowledge_harvester` | `graphs/knowledge_harvester_graph.py` | 공공 오픈 데이터 6곳 → 위키 카탈로그 | 공개 API (키 불필요) | – |
 | `source_verification` | `graphs/source_verification_graph.py` | SearXNG 검색 → LLM 신뢰도 심사 → 볼트 | 로컬 `SearXNG`, LLM 프록시 | `loader` 직전 |

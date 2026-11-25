@@ -132,17 +132,51 @@ def score_style(style, tones, text=""):
     return score
 
 
-def plan_variants(brief, styles, limit=3, breakpoints=("desktop",), themes=("light",)):
-    """IR과 명부로 렌더 후보를 만든다. 스타일마다 (스타일, 브레이크포인트, 테마) 조합."""
+def _style_tiebreak(seed, name):
+    """같은 점수의 스타일 순서를 seed로 고정한다(다른 seed면 다른 조합)."""
+    if seed is None:
+        return name
+    import hashlib
+
+    return hashlib.sha1(f"{seed}:{name}".encode("utf-8")).hexdigest()
+
+
+def plan_variants(
+    brief,
+    styles,
+    limit=3,
+    breakpoints=("desktop",),
+    themes=("light",),
+    seed=None,
+    style_ids=None,
+):
+    """IR과 명부로 렌더 후보를 만든다. 스타일마다 (스타일, 브레이크포인트, 테마) 조합.
+
+    style_ids를 주면 그 스타일만, 없으면 톤 점수 상위 limit개를 쓴다.
+    seed는 동점 스타일의 순서만 바꾼다(점수 우선순위는 유지, 결과는 재현 가능).
+    """
     text = brief.get("purpose", "")
     tones = brief.get("tones") or ["편집"]
     ranked = sorted(
         styles,
-        key=lambda s: (-score_style(s, tones, text), s.get("name", "")),
+        key=lambda s: (
+            -score_style(s, tones, text),
+            _style_tiebreak(seed, s.get("name", "")),
+        ),
     )
-    chosen = [s for s in ranked if score_style(s, tones, text) > 0][:limit]
-    if not chosen:  # 톤이 하나도 안 맞으면 이름순 상위로 폴백
-        chosen = ranked[:limit]
+    if style_ids:
+        wanted = list(style_ids)
+        by_key = {}
+        for style in styles:
+            by_key[style.get("name")] = style
+            by_key[style.get("id")] = style
+        chosen = [by_key[key] for key in wanted if key in by_key]
+        if not chosen:
+            chosen = ranked[:limit]
+    else:
+        chosen = [s for s in ranked if score_style(s, tones, text) > 0][:limit]
+        if not chosen:  # 톤이 하나도 안 맞으면 이름순 상위로 폴백
+            chosen = ranked[:limit]
     variants = []
     for style in chosen:
         for breakpoint in breakpoints:
