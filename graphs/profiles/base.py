@@ -247,11 +247,13 @@ def _ensure_builtin() -> None:
     """내장 profile을 지연 등록한다(순환 import 회피)."""
     if _REGISTRY:
         return
+    from graphs.profiles import brand as brand_profile
     from graphs.profiles import print as print_profile
     from graphs.profiles import web as web_profile
 
     register(web_profile.WebProfile())
     register(print_profile.PrintProfile())
+    register(brand_profile.BrandProfile())
 
 
 def resolve_profile_name(spec: Optional[Mapping[str, Any]]) -> str:
