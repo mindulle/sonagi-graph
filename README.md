@@ -323,9 +323,10 @@ assets.write_ledger(result["renders"][0], ["style=...: 판정 pass · 점수 100
 | 환경변수            | 기본                                     | 뜻                           |
 | ------------------- | ---------------------------------------- | ---------------------------- |
 | `SONAGI_ASSETS_DIR` | `/home/ubuntu/sonagi-assets`             | 렌더러·린터·명부가 있는 곳   |
-| `SONAGI_CATALOG`    | `<assets>/test_data/golden/catalog.json` | 자산 카탈로그                |
+| `SONAGI_CATALOG`    | `<assets>/catalog/catalog.json` (없으면 골든) | 자산 카탈로그 — `docs/CATALOG_SYNC.md` |
 | `SONAGI_TOKENS`     | `<assets>/tokens/semantic.json`          | 린터가 쓰는 토큰             |
 | `SONAGI_CRAFT_OUT`  | `/tmp/asset_craft`                       | 변주 출력 루트(레거시 별칭)  |
+| `SONAGI_CRAFT_REFS` | `8`                                      | 스카우트가 고를 참고 자산 수 |
 
 판단 로직은 `craft.py`에 있고 LangGraph에 의존하지 않는다(`test_craft.py`).
 

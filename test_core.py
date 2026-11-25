@@ -3,6 +3,7 @@
 네트워크·렌더러 없이 돈다. subprocess는 현재 인터프리터만 쓴다.
 """
 
+import io
 import os
 import subprocess
 import sys
@@ -22,16 +23,67 @@ ROOT = Path(__file__).resolve().parent
 # ---------------------------------------------------------------------------
 
 
-def test_env_defaults_match_existing_graphs():
+def test_env_defaults_match_existing_graphs(monkeypatch):
+    # 이 호스트에 실카탈로그가 동기화되어 있어도 기본값 테스트는 결정적이어야 한다.
+    monkeypatch.setattr(env, "_file_exists", lambda _path: False)
     paths = env.load_paths({})
     assert paths.assets_dir == Path("/home/ubuntu/sonagi-assets")
     assert paths.catalog == Path(
         "/home/ubuntu/sonagi-assets/test_data/golden/catalog.json"
     )
+    assert paths.catalog_source == env.CATALOG_SOURCE_FALLBACK
     assert paths.tokens == Path("/home/ubuntu/sonagi-assets/tokens/semantic.json")
     assert paths.wiki_dir == Path("/home/ubuntu/llm-wiki")
     assert paths.searxng_url == "http://localhost:8080"
     assert paths.vectorcraft == "vectorcraft-cli"
+
+
+def test_catalog_resolution_order(tmp_path):
+    assets = tmp_path / "assets"
+    real = assets / "catalog/catalog.json"
+    golden = assets / "test_data/golden/catalog.json"
+    golden.parent.mkdir(parents=True)
+    golden.write_text('{"items": []}', encoding="utf-8")
+
+    # 실카탈로그가 없으면 골든으로 폴백
+    catalog, source = env.resolve_catalog({"SONAGI_ASSETS_DIR": str(assets)})
+    assert (catalog, source) == (golden, env.CATALOG_SOURCE_FALLBACK)
+
+    # 실카탈로그가 생기면 그것을 쓴다
+    real.parent.mkdir(parents=True)
+    real.write_text('{"items": []}', encoding="utf-8")
+    catalog, source = env.resolve_catalog({"SONAGI_ASSETS_DIR": str(assets)})
+    assert (catalog, source) == (real, env.CATALOG_SOURCE_REAL)
+
+    # 명시한 SONAGI_CATALOG가 항상 이긴다(존재 검사 없음)
+    catalog, source = env.resolve_catalog(
+        {"SONAGI_ASSETS_DIR": str(assets), "SONAGI_CATALOG": "/srv/explicit.json"}
+    )
+    assert (catalog, source) == (Path("/srv/explicit.json"), env.CATALOG_SOURCE_REAL)
+
+    paths = env.load_paths({"SONAGI_ASSETS_DIR": str(assets)})
+    assert paths.catalog == real
+    assert paths.catalog_source == env.CATALOG_SOURCE_REAL
+
+
+def test_catalog_fallback_warns_exactly_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(env, "_warned_fallback", False)
+    fallback = tmp_path / "golden/catalog.json"
+    log = io.StringIO()
+
+    assert env.warn_catalog_fallback(fallback, env.CATALOG_SOURCE_FALLBACK, stream=log)
+    assert not env.warn_catalog_fallback(
+        fallback, env.CATALOG_SOURCE_FALLBACK, stream=log
+    )
+    assert log.getvalue().count("\n") == 1
+    assert "golden fallback" in log.getvalue()
+    assert str(fallback) in log.getvalue()
+
+    # real 출처는 경고하지 않는다
+    monkeypatch.setattr(env, "_warned_fallback", False)
+    log = io.StringIO()
+    assert not env.warn_catalog_fallback(fallback, env.CATALOG_SOURCE_REAL, stream=log)
+    assert log.getvalue() == ""
 
 
 def test_env_overrides():
@@ -48,6 +100,7 @@ def test_env_overrides():
     )
     assert paths.assets_dir == Path("/srv/assets")
     assert paths.catalog == Path("/srv/catalog.json")
+    assert paths.catalog_source == env.CATALOG_SOURCE_REAL
     assert paths.tokens == Path("/srv/tokens.json")
     assert paths.out_root == Path("/srv/out")
     assert paths.wiki_dir == Path("/srv/wiki")
