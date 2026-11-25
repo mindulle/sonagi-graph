@@ -30,6 +30,9 @@ services:
       OPENAI_API_BASE: http://172.19.0.1:38107/v1
       SEARXNG_URL: http://172.19.0.1:8080
       SONAGI_ASSETS_DIR: /home/ubuntu/sonagi-assets
+      # scripts/sync_catalog.sh가 devops에서 동기화하는 실카탈로그(14k items).
+      # 파일이 없으면 graphs/core/env.py가 골든 카탈로그로 경고 폴백한다.
+      SONAGI_CATALOG: /home/ubuntu/sonagi-assets/catalog/catalog.json
       SONAGI_WIKI_DIR: /home/ubuntu/llm-wiki
       SONAGI_CDN_VIDEO_DIR: /var/www/craft-suite/video/exports
       MDS_TOKENS_DIR: /home/ubuntu/mindulle-design-system/packages/tokens
