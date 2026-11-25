@@ -1,25 +1,8 @@
 """PackageSeriesGraph 단위 테스트."""
 
-import os
-from pathlib import Path
-from unittest.mock import patch
-
 import pytest
-from langchain_core.runnables import RunnableLambda
 
 from graphs import package_series_graph as mod
-
-
-def _fake_press_run(out_dir):
-    out = Path(out_dir)
-    cand = out / "candidates" / "c01"
-    cand.mkdir(parents=True, exist_ok=True)
-    (cand / "mark.svg").write_text('<svg><g id="symbol"/></svg>', encoding="utf-8")
-    (out / "run.json").write_text(
-        '{"selected": [{"id": "c01", "territory": "stamp_bar", "score": 0.8}], "status": "awaiting_approval"}',
-        encoding="utf-8",
-    )
-    return 0
 
 
 def test_graph_compiles():
@@ -30,39 +13,28 @@ def test_graph_compiles():
     assert g is not None
 
 
-def test_press_mark_once_generates_and_locks(monkeypatch, tmp_path):
-    monkeypatch.setenv("SONAGI_PRESS_DIR", str(tmp_path / "press"))
-    monkeypatch.setattr(mod, "OUT_ROOT", tmp_path / "out")
+def test_lock_mark_loads_existing_svg(tmp_path):
+    p = tmp_path / "mark.svg"
+    p.write_text('<svg><g id="symbol"/></svg>', encoding="utf-8")
 
-    def fake_run(args, cwd=None, env=None):
-        out = Path(args[args.index("--out") + 1])
-        _fake_press_run(out)
-
-        class R:
-            returncode = 0
-            stdout = ""
-            stderr = ""
-
-        return R()
-
-    import graphs.logo_design_graph as craft_mod
-
-    monkeypatch.setattr(craft_mod, "_run_subprocess", fake_run)
-
-    result = mod.press_mark_once({"brief": "TestBrand", "mark_source": "generate"})
+    result = mod.lock_mark({"mark_source": "existing", "mark_path": str(p)})
     assert result["status"] == "mark_locked"
-    assert result["mark_svg"] is not None
-    assert result["mark_path"].endswith("mark.svg")
+    assert result["mark_svg"] == '<svg><g id="symbol"/></svg>'
 
 
-def test_press_mark_once_skips_if_already_locked():
-    result = mod.press_mark_once({"mark_svg": "<svg/>", "mark_source": "generate"})
+def test_lock_mark_skips_if_already_locked():
+    result = mod.lock_mark({"mark_svg": "<svg/>", "mark_source": "existing"})
     assert result["status"] == "mark_already_locked"
 
 
-def test_press_mark_once_skips_if_not_generate():
-    result = mod.press_mark_once({"mark_source": "existing"})
+def test_lock_mark_skips_without_existing_source():
+    result = mod.lock_mark({"mark_source": "none"})
     assert result["status"] == "mark_skipped"
+
+
+def test_lock_mark_rejects_missing_path():
+    with pytest.raises(ValueError):
+        mod.lock_mark({"mark_source": "existing", "mark_path": "/nope/mark.svg"})
 
 
 def test_route_after_series_hitl_proceeds_when_approved():

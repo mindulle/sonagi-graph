@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""press가 부르는 `inkscape`를 VectorCraft로 대체하는 shim.
+"""`inkscape` 호출을 VectorCraft로 대체하는 shim.
 
-press_audit.render는 `inkscape IN --export-type=png --export-filename=OUT -w WIDTH`
-형태로만 호출한다. 이 shim은 같은 인자를 받아 `vectorcraft-cli convert`로 넘긴다.
-이미 크래프트 CLI가 마운트되어 있으므로 inkscape를 이미지에 넣을 필요가 없다.
+context_test가 SVG를 PNG로 래스터화할 때 `inkscape IN --export-type=png
+--export-filename=OUT -w WIDTH` 형태의 호출이 필요하다. 이 shim은 같은 인자를
+받아 `vectorcraft-cli convert`로 넘긴다. 크래프트 CLI가 마운트되어 있으므로
+inkscape를 이미지에 넣을 필요가 없다.
 
-`--query-all`은 VectorCraft에 대응 명령이 없어 빈 출력으로 끝낸다. press_audit은
-그 경우 advisory(A070/A071)만 남기고 실패하지 않는다.
+`--query-all`은 VectorCraft에 대응 명령이 없어 빈 출력으로 끝난다. 호출측은
+이 경우 검증을 건너뛰고 실패하지 않는다.
 """
 
 import os
