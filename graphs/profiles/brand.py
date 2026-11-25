@@ -61,7 +61,7 @@ import json
 import re
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from graphs.core import artifacts as core_artifacts
 from graphs.core import env as core_env
@@ -70,6 +70,12 @@ from graphs.profiles import base
 DEFAULT_SIZES: Tuple[int, ...] = (16, 32, 64, 256, 512)
 DEFAULT_BACKGROUNDS: Tuple[str, ...] = ("light", "dark")
 BACKGROUNDS = ("light", "dark")
+
+#: context_test가 렌더하는 크기 — 16px 파비콘부터 앱 아이콘까지.
+CONTEXT_SIZES: Tuple[int, ...] = (16, 32, 64, 256)
+
+#: 렌더가 실패했을 때의 감점(삭제된 logo_design 그래프와 같은 값).
+CRAFT_FAILURE_PENALTY = 20
 
 DEFAULT_PALETTE: Dict[str, str] = {
     "ink": "#161616",
@@ -132,6 +138,14 @@ _CSS_VAR = re.compile(r"var\(\s*(--[A-Za-z0-9_-]+)\s*(?:,\s*([^()]*))?\)")
 _CLASS_SELECTOR = re.compile(r"^(?P<tag>[A-Za-z][\w:-]*)?\.(?P<cls>[-\w]+)$")
 _TEXT_OPEN = re.compile(r"<\s*text\b", re.I)
 _CLASS_ATTR = re.compile(r"\sclass\s*=", re.I)
+
+#: context_test — 구조·가독성 검사용 패턴.
+_SHAPE = re.compile(r"<(circle|rect|path|polygon|ellipse|line|g|use)\b")
+_VIEWBOX = re.compile(r'viewBox="([^"]+)"')
+_STROKE_WIDTH = re.compile(r'stroke-width="([0-9.]+)"')
+_PAINT = re.compile(r'\b(fill|stroke)="([^"]+)"')
+#: 색이 아닌 채우기 값 — 개수에서 뺀다.
+_NOT_A_COLOR = {"none", "transparent", "currentcolor", "inherit", "unset"}
 
 
 class BrandGateError(RuntimeError):
@@ -833,6 +847,490 @@ def build_icon_variants(
 
 
 # ---------------------------------------------------------------------------
+# context_test — 여러 크기 렌더 + 구조·가독성 검사 (GRAPH-21 흡수)
+# ---------------------------------------------------------------------------
+
+
+def _context_workdir(workdir: Optional[Path]) -> Path:
+    if workdir is not None:
+        path = Path(workdir)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    import tempfile
+
+    return Path(tempfile.mkdtemp(prefix="ctx-test-"))
+
+
+def _color_values(mark_svg: str) -> set:
+    """fill/stroke에 실제로 지정된 색값(hex·이름 모두). none·url()은 빼다."""
+    values = set()
+    for _, value in _PAINT.findall(mark_svg):
+        text = str(value).strip().lower()
+        if not text or text in _NOT_A_COLOR or text.startswith("url("):
+            continue
+        values.add(text)
+    return values
+
+
+def _check_structure(mark_svg: str, report: Dict[str, Any]) -> int:
+    """SVG 구조 검사 — 요소 수·viewBox·stroke·색상 수. 감점 합계를 돌려준다."""
+    penalties = 0
+    element_count = len(_SHAPE.findall(mark_svg))
+    if element_count > 20:
+        report["issues"].append(
+            f"SVG 요소 {element_count}개 — 너무 복잡 (16px에서 뭉개짐)"
+        )
+        penalties += 15
+    if element_count == 0:
+        report["issues"].append("SVG 요소가 없음 — 형태가 없음")
+        penalties += 20
+    report["checks"]["element_count"] = element_count
+
+    viewbox = _VIEWBOX.search(mark_svg)
+    if viewbox:
+        parts = [part for part in re.split(r"[\s,]+", viewbox.group(1).strip()) if part]
+        try:
+            width, height = float(parts[2]), float(parts[3])
+        except (IndexError, ValueError):
+            report["issues"].append("viewBox 형식을 읽을 수 없음")
+            penalties += 10
+        else:
+            if abs(width - height) > 0.1:
+                report["issues"].append(
+                    f"viewBox 비정사각 ({width}x{height}) — 스케일링 왜곡 가능"
+                )
+                penalties += 5
+            if width < 50 or height < 50:
+                report["issues"].append(f"viewBox 너무 작음 ({width}x{height})")
+                penalties += 10
+    else:
+        report["issues"].append("viewBox 없음 — 스케일링 불가")
+        penalties += 10
+
+    strokes = [float(match.group(1)) for match in _STROKE_WIDTH.finditer(mark_svg)]
+    if strokes:
+        minimum = min(strokes)
+        if minimum < 1.5:
+            report["issues"].append(f"stroke-width {minimum} < 1.5 — 16px에서 사라짐")
+            penalties += 10
+        if len(set(strokes)) > 1:
+            report["issues"].append(
+                f"stroke-width 불일치: {sorted(set(strokes))} — 일관성 부족"
+            )
+            penalties += 5
+
+    colors = _color_values(mark_svg)
+    report["checks"]["color_count"] = len(colors)
+    if len(colors) > 3:
+        report["issues"].append(f"색상 {len(colors)}개 — 로고는 1~2색이 이상적")
+        penalties += 10
+    if not colors:
+        report["issues"].append("색상 없음 — fill/stroke 미지정")
+        penalties += 15
+
+    if element_count <= 3:
+        report["checks"]["complexity"] = "simple"
+    elif element_count <= 8:
+        report["checks"]["complexity"] = "moderate"
+    else:
+        report["checks"]["complexity"] = "complex"
+    return penalties
+
+
+def _rgba_pixels(image: Any) -> Tuple[int, int, List[Tuple[int, int, int, int]]]:
+    """Pillow 이미지 → (폭, 높이, RGBA 픽셀). `getdata()` 없이 바이트로 읽는다."""
+    rgba = image.convert("RGBA")
+    raw = rgba.tobytes()
+    rows = [(raw[i], raw[i + 1], raw[i + 2], raw[i + 3]) for i in range(0, len(raw), 4)]
+    return rgba.width, rgba.height, rows
+
+
+def _check_shape_preservation(
+    workdir: Path, report: Dict[str, Any], *, large: int, small: int
+) -> int:
+    """작은 크기로 줄여도 형태가 남는가 — 큰 크기 마스크와의 IoU."""
+    penalties = 0
+    big_path = Path(workdir) / f"mark_{large}.png"
+    small_path = Path(workdir) / f"mark_{small}.png"
+    try:
+        from PIL import Image
+
+        if not (big_path.is_file() and small_path.is_file()):
+            return 0
+        with Image.open(big_path) as big_raw, Image.open(small_path) as small_raw:
+            width, height, big = _rgba_pixels(big_raw)
+            small = small_raw.convert("RGBA").resize((width, height), Image.NEAREST)
+            small_pixels = _rgba_pixels(small)[2]
+
+        big_mask = [1 if pixel[3] > 128 else 0 for pixel in big]
+        small_mask = [1 if pixel[3] > 128 else 0 for pixel in small_pixels]
+        intersection = sum(1 for a, b in zip(big_mask, small_mask) if a and b)
+        union = sum(1 for a, b in zip(big_mask, small_mask) if a or b)
+        iou = intersection / union if union else 0.0
+        report["checks"]["shape_preservation_iou"] = round(iou, 3)
+        if iou < 0.5:
+            report["issues"].append(
+                f"{small}px 가독성 낮음 (IoU {iou:.2f} < 0.5) — 형태가 무너짐"
+            )
+            penalties += 25
+        elif iou < 0.7:
+            report["issues"].append(
+                f"{small}px 가독성 보통 (IoU {iou:.2f}) — 세부가 사라짐"
+            )
+            penalties += 10
+    except Exception as exc:  # noqa: BLE001 - 이미지가 없거나 깨졌으면 점수만 보류
+        report["checks"]["shape_preservation_error"] = _tail(exc, 80)
+    return penalties
+
+
+def _check_contrast(workdir: Path, report: Dict[str, Any], *, large: int) -> int:
+    """큰 크기 렌더에서 마크가 보이는가 — 픽셀 수·평균 휘도·대비비."""
+    penalties = 0
+    path = Path(workdir) / f"mark_{large}.png"
+    try:
+        from PIL import Image
+
+        if not path.is_file():
+            return 0
+        with Image.open(path) as raw:
+            _, _, pixels = _rgba_pixels(raw)
+        opaque = [pixel for pixel in pixels if pixel[3] > 128]
+        if len(opaque) < 100:
+            report["issues"].append(f"{large}px: 마크가 거의 보이지 않음 (픽셀 부족)")
+            return 30
+
+        luminance = [
+            0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2]
+            for pixel in opaque
+        ]
+        average = sum(luminance) / len(luminance)
+        if average > 180:
+            report["issues"].append(
+                f"마크가 밝음 (avg lum {average:.0f}) — 라이트 배경에서 안 보일 수 있음"
+            )
+            penalties += 10
+        if average < 70:
+            report["issues"].append(
+                f"마크가 어두움 (avg lum {average:.0f}) — 다크 배경에서 안 보일 수 있음"
+            )
+            penalties += 10
+        ratio = (
+            average / max(255 - average, 1)
+            if average > 127
+            else max(255 - average, 1) / max(average, 1)
+        )
+        report["checks"]["contrast_ratio"] = round(ratio, 2)
+        if ratio < 3.0:
+            report["issues"].append(f"대비 부족 (ratio {ratio:.1f} < 3.0)")
+            penalties += 15
+    except Exception as exc:  # noqa: BLE001
+        report["checks"]["contrast_error"] = _tail(exc, 80)
+    return penalties
+
+
+def _check_balance(workdir: Path, report: Dict[str, Any], *, large: int) -> int:
+    """광학 균형 — 캔버스 사용률·중심 이탈."""
+    penalties = 0
+    path = Path(workdir) / f"mark_{large}.png"
+    try:
+        from PIL import Image
+
+        if not path.is_file():
+            return 0
+        with Image.open(path) as raw:
+            width, height, pixels = _rgba_pixels(raw)
+        points = [
+            (index % width, index // width)
+            for index, pixel in enumerate(pixels)
+            if pixel[3] > 128
+        ]
+        if not points:
+            return 0
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        box_w = max(xs) - min(xs) + 1
+        box_h = max(ys) - min(ys) + 1
+        usage = (box_w * box_h) / (width * height)
+        report["checks"]["canvas_usage"] = round(usage, 3)
+        report["checks"]["bbox"] = [min(xs), min(ys), box_w, box_h]
+        if usage < 0.15:
+            report["issues"].append(f"마크가 너무 작음 (캔버스 사용 {usage:.0%} < 15%)")
+            penalties += 15
+        if usage > 0.95:
+            report["issues"].append(f"마크가 캔버스를 넘침 ({usage:.0%}) — 여백 없음")
+            penalties += 10
+        center_x = (min(xs) + max(xs)) / 2
+        center_y = (min(ys) + max(ys)) / 2
+        offset_x = abs(center_x - width / 2) / (width / 2)
+        offset_y = abs(center_y - height / 2) / (height / 2)
+        if offset_x > 0.15 or offset_y > 0.15:
+            report["issues"].append(
+                f"광학 중심 이탈 (x={offset_x:.2f}, y={offset_y:.2f})"
+            )
+            penalties += 10
+    except Exception as exc:  # noqa: BLE001
+        report["checks"]["balance_error"] = _tail(exc, 80)
+    return penalties
+
+
+def context_test(
+    mark_svg: Optional[str],
+    *,
+    ctx: Optional[base.ProfileContext] = None,
+    workdir: Optional[Path] = None,
+    sizes: Sequence[int] = CONTEXT_SIZES,
+) -> Dict[str, Any]:
+    """마크를 16/32/64/256px에서 렌더하고 가독성·구조·대비·균형을 채점한다.
+
+    마크가 없으면 100점으로 건너뛴다(레이아웃만 검증하는 경로). 렌더·검사는
+    전부 결정론이고 LLM을 쓰지 않는다. `ctx.run` 훅이 vectorcraft를 대신한다.
+    """
+    if not mark_svg:
+        return {
+            "sizes": {},
+            "score": 100,
+            "issues": [],
+            "checks": {},
+            "skipped": True,
+            "note": "마크 없음 — 건너뜀",
+        }
+
+    context = ctx or base.ProfileContext(out_root=Path(core_env.out_root("entry_pack")))
+    work = _context_workdir(workdir)
+    svg_path = work / "mark.svg"
+    svg_path.write_text(mark_svg, encoding="utf-8")
+
+    requested = tuple(int(size) for size in sizes) or CONTEXT_SIZES
+    large, small = max(requested), min(requested)
+    native_w, native_h = _svg_geometry(svg_path)
+    base_size = max(native_w, native_h, 1.0)
+
+    report: Dict[str, Any] = {"sizes": {}, "score": 100, "issues": [], "checks": {}}
+    penalties = 0
+    for size in requested:
+        out = work / f"mark_{size}.png"
+        if out.exists():  # 같은 workdir 재사용 시 이전 렌더를 점수에 쓰지 않는다
+            out.unlink()
+        try:
+            context.run(
+                [
+                    _binary(context),
+                    "convert",
+                    str(svg_path),
+                    str(out),
+                    "--scale",
+                    f"{size / base_size:.6f}",
+                ],
+                timeout=60,
+            )
+            if out.is_file() and out.stat().st_size > 100:
+                report["sizes"][size] = "ok"
+            else:
+                report["sizes"][size] = "blank"
+                report["issues"].append(f"{size}px: 렌더 실패 또는 빈 이미지")
+                penalties += 15
+        except Exception as exc:  # noqa: BLE001
+            report["sizes"][size] = f"error: {_tail(exc, 80)}"
+            report["issues"].append(f"{size}px: {_tail(exc, 80)}")
+            penalties += 20
+
+    penalties += _check_structure(mark_svg, report)
+    penalties += _check_shape_preservation(work, report, large=large, small=small)
+    penalties += _check_contrast(work, report, large=large)
+    penalties += _check_balance(work, report, large=large)
+    report["score"] = max(0, min(100, 100 - penalties))
+    return report
+
+
+def critic_score(
+    context_score: int,
+    *,
+    craft_failed: bool = False,
+    penalty: int = CRAFT_FAILURE_PENALTY,
+) -> int:
+    """context_test 점수에 렌더 실패 감점을 적용한 최종 점수(0~100)."""
+    applied = max(0, int(penalty)) if craft_failed else 0
+    return max(0, min(100, int(context_score) - applied))
+
+
+# ---------------------------------------------------------------------------
+# print_prep — 인쇄 사양 검사 (GRAPH-21 흡수)
+# ---------------------------------------------------------------------------
+
+
+def print_prep(
+    print_spec: Optional[Mapping[str, Any]],
+    *,
+    variants: Sequence[Any] = (),
+    craft_status: str = "",
+    mark_source: Optional[str] = None,
+    mark_locked: bool = False,
+) -> Dict[str, Any]:
+    """인쇄 사양(도련·CMYK 프로파일)과 렌더 상태를 검사한다.
+
+    사양이 없으면 건너뛴다(`ok=True`, `skipped=True`). 사양이 있으면 문제를
+    모두 모아 `issues`에 남긴다 — 첫 번째에서 멈추지 않는다.
+    """
+    if not print_spec:
+        return {
+            "ok": True,
+            "issues": [],
+            "report": "인쇄 사양 없음 — 건너뜀",
+            "skipped": True,
+        }
+
+    issues: List[str] = []
+    status = str(craft_status or "")
+    if status.startswith("error"):
+        issues.append(f"asset 렌더 실패: {status[:100]}")
+    if not list(variants) and not status.startswith("error"):
+        issues.append("변주가 생성되지 않았습니다")
+    # 문자열 "false"를 우회로 인정하지 않는다 — brand 게이트와 같은 엄격 규칙.
+    if mark_source not in (None, "none") and mark_locked is not True:
+        issues.append("마크가 잠기지 않았습니다")
+
+    raw_bleed = print_spec.get("bleed_mm", 0) or 0
+    try:
+        bleed = float(raw_bleed)
+    except (TypeError, ValueError):
+        issues.append(f"bleed_mm이 숫자가 아니다 — {raw_bleed!r}")
+    else:
+        if bleed < 3:
+            issues.append(f"bleed {bleed:g}mm < 3mm")
+    if print_spec.get("cmyk") and not print_spec.get("cmyk_profile"):
+        issues.append("CMYK 프로파일 미지정 (ISO Coated v2 권장)")
+
+    return {
+        "ok": not issues,
+        "issues": issues,
+        "report": "✅ 인쇄 준비 통과" if not issues else "⚠️ " + "; ".join(issues),
+        "skipped": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# series — N건 배치 모드 (GRAPH-21 흡수)
+# ---------------------------------------------------------------------------
+
+#: 배치가 더 진행하지 않을 때의 라우팅 이름(그래프의 END와 같은 뜻).
+SERIES_STOP = "__end__"
+
+
+def series_lock_mark(state: Mapping[str, Any]) -> Dict[str, Any]:
+    """마크를 한 번만 확정한다. 마크 생성은 하지 않는다(`mark_path`만 읽는다)."""
+    if state.get("mark_svg"):
+        return {"status": "mark_already_locked"}
+    if state.get("mark_source", "none") != "existing":
+        return {"status": "mark_skipped"}
+    path = state.get("mark_path")
+    if not path or not Path(str(path)).is_file():
+        raise ValueError(f"mark_path가 유효하지 않습니다: {path}")
+    return {
+        "mark_svg": Path(str(path)).read_text(encoding="utf-8"),
+        "status": "mark_locked",
+    }
+
+
+def series_plan(deliverables: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    """납품 목록을 정규화한다(이름·인덱스·인쇄 사양 보존). 빈 목록은 실패."""
+    rows: List[Dict[str, Any]] = []
+    for index, item in enumerate(deliverables or []):
+        if not isinstance(item, Mapping):
+            raise base.ProfileError(
+                f"brand series: deliverables[{index}]는 사전이어야 한다 — {item!r}"
+            )
+        rows.append(
+            {
+                "name": str(item.get("name") or f"deliverable-{index}"),
+                "index": index,
+                "print_spec": item.get("print_spec"),
+            }
+        )
+    if not rows:
+        raise base.ProfileError(
+            "brand series: deliverables가 비었다 — [{name, print_spec}] 1건 이상"
+        )
+    return rows
+
+
+def series_step(
+    state: Mapping[str, Any],
+    deliver: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """현재 항목 하나를 `deliver` 콜러블로 처리하고 결과를 누적한다.
+
+    `deliver`는 항목 payload를 받아 결과 사전을 돌려주는 함수다(보통
+    `entry_pack` 그래프 실행). payload에는 `brief`·`spec`(state의 템플릿 +
+    항목 `print_spec`)·`mark_path`·`mark_svg`가 실린다. 배치 순서·인덱스·HITL만
+    profile이 소유한다.
+    """
+    index = int(state.get("current_index") or 0)
+    plan = list(state.get("plan") or series_plan(state.get("deliverables") or []))
+    if index >= len(plan):
+        return {"status": "all_delivered"}
+
+    item = plan[index]
+    brief = str(state.get("brief") or "").strip()
+    spec = dict(state.get("spec") or {})
+    if item.get("print_spec"):
+        spec.setdefault("print_spec", item["print_spec"])
+    payload = {
+        "brief": f"{brief} — {item['name']}".strip(" —"),
+        "name": item["name"],
+        "index": index,
+        "deliverable": item,
+        "spec": spec,
+        "print_spec": item.get("print_spec"),
+        "mark_source": "existing" if state.get("mark_svg") else "none",
+        "mark_path": state.get("mark_path"),
+        "mark_svg": state.get("mark_svg"),
+        "content": state.get("content"),
+        "max_iterations": 1,
+        "approval_status": "approved",
+    }
+    result = dict(deliver(payload) or {})
+    result.setdefault("name", item["name"])
+    result.setdefault("index", index)
+
+    results = list(state.get("results") or [])
+    results.append(result)
+    return {
+        "results": results,
+        "current_index": index + 1,
+        "status": f"delivered_{item['name']}",
+    }
+
+
+def series_hitl(state: Mapping[str, Any]) -> Dict[str, Any]:
+    """항목 하나가 끝난 뒤의 승인 게이트. 승인되면 다음 항목을 위해 초기화한다."""
+    if state.get("approval_status") == "approved":
+        return {"status": "approved", "approval_status": "pending"}
+    index = int(state.get("current_index") or 0) - 1
+    plan = list(state.get("plan") or series_plan(state.get("deliverables") or []))
+    name = plan[index]["name"] if 0 <= index < len(plan) else "unknown"
+    return {"approval_status": "pending", "status": f"awaiting_approval_{name}"}
+
+
+def series_next(state: Mapping[str, Any]) -> str:
+    """승인 후 라우팅 — 다음 항목(`deliver_one`) 또는 일괄 납품(`publish_all`)."""
+    if state.get("status") != "approved":
+        return SERIES_STOP
+    index = int(state.get("current_index") or 0)
+    plan = list(state.get("plan") or series_plan(state.get("deliverables") or []))
+    if index < len(plan):
+        return "deliver_one"
+    return "publish_all"
+
+
+def series_publish(results: Sequence[Mapping[str, Any]]) -> List[str]:
+    """누적 결과 → 사람이 읽는 납품 요약."""
+    return [
+        f"{row.get('name', 'unknown')}: {row.get('status', 'unknown')}"
+        for row in results
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Profile
 # ---------------------------------------------------------------------------
 
@@ -1123,3 +1621,34 @@ class BrandProfile:
                 }
             )
         return rows
+
+    def review(
+        self,
+        mark_svg: Optional[str],
+        *,
+        ctx: Optional[base.ProfileContext] = None,
+        workdir: Optional[Path] = None,
+        print_spec: Optional[Mapping[str, Any]] = None,
+        craft_failed: bool = False,
+        variants: Sequence[Any] = (),
+        craft_status: str = "",
+        mark_source: Optional[str] = None,
+        mark_locked: bool = False,
+    ) -> Dict[str, Any]:
+        """납품 전 검토 한 번 — context_test + critic + print_prep.
+
+        삭제된 `logo_design` 그래프의 검증 단계를 profile의 공개 API로 묶었다.
+        그래프·스크립트는 이 메서드 하나만 호출하면 된다(마크 생성 없음).
+        """
+        context = context_test(mark_svg, ctx=ctx, workdir=workdir)
+        return {
+            "context": context,
+            "score": critic_score(context["score"], craft_failed=craft_failed),
+            "print": print_prep(
+                print_spec,
+                variants=variants,
+                craft_status=craft_status,
+                mark_source=mark_source,
+                mark_locked=mark_locked,
+            ),
+        }

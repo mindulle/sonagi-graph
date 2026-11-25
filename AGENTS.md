@@ -10,9 +10,8 @@ Discord 세션에서 그래프를 실행하려면 `scripts/graph_cli.py`를 쓴�
 | 그래프 | 용도 | 입력 예시 |
 |---|---|---|
 | `error_triage` | Sentry 에러 분석 | `{"messages":[{"role":"user","content":"에러 로그"}]}` |
-| `logo_design` | 로고 패키지 검증 (LLM 방향 + context_test + HITL) | `{"brief":"브랜드명","mark_source":"existing","mark_path":"/path/mark.svg"}` |
-| `package_series` | 3건 패키지 납품 | `{"brief":"...","deliverables":[...],"mark_source":"existing","mark_path":"/path/mark.svg"}` |
-| `entry_pack` | 콘테스트 엔트리 변주·포장 | `{"brief":"...","spec":{"platform":"99designs","styles_per_direction":2}}` |
+| `entry_pack` | 엔트리 변주·포장 (profile `web`/`print`/`brand`) | `{"brief":"...","spec":{"platform":"99designs"}}` |
+| `entry_pack` (brand) | 마크 납품 — 정규화·아웃라인·게이트·팩 | `{"brief":"브랜드","spec":{"profile":"brand","brand":{"mark_path":"/path/mark.svg"}}}` |
 | `copywriting_craft` | 카피 3안 생성 | `{"scene_id":"Act 1","raw_draft":"초안","context":"맥락"}` |
 | `editorial_verification` | 글 4대 검증 | `{"title":"제목","content":"본문"}` |
 | `visual_consistency` | 시각 일관성 검증 | `{"project_name":"프로젝트","vectors":[...],"motions":[...],"imagery":[...]}` |
@@ -45,5 +44,5 @@ python3 scripts/graph_cli.py approve <thread_id> --graph <graph_id> --values '<j
 
 - `LANGGRAPH_URL` 기본값: `http://127.0.0.1:8123`
 - research/knowledge_harvester는 네트워크 호출로 60~120초 걸릴 수 있음
-- `skip_research=True`로 research 건너뛰기 가능 (logo_design)
-- `skip_vision=True`로 LLM vision 체크 건너뛰기 가능 (logo_design)
+- `skip_knowledge=True`로 레퍼런스 수집을, `skip_llm=True`로 방향 생성을 건너뛸 수 있음 (entry_pack)
+- brand profile은 기본값이 `skip_knowledge`·`skip_llm`이라 네트워크·LLM 없이 결정론으로 돈다

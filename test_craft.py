@@ -113,14 +113,6 @@ def test_minimal_brief_picks_brand_neutral_styles():
     assert names & {"minimal", "swiss", "mint-swiss", "ocean-swiss", "forest-paper"}
 
 
-def test_graph_compiles_with_interrupt():
-    pytest.importorskip("langgraph")
-    from graphs.asset_craft_graph import build_graph
-
-    graph = build_graph()
-    assert graph is not None
-
-
 def _ref(
     name,
     *,

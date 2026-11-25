@@ -1,7 +1,7 @@
 """Craft의 판단 로직 — LLM 없이 재현되는 부분만 모아 둔다.
 
-`graphs/asset_craft_graph.py`는 이 함수들을 노드에서 호출한다. LangGraph에
-의존하지 않으므로 테스트가 서비스 없이 돈다.
+`graphs/adapters/assets.py`(GRAPH-21 이전에는 `asset_craft` 그래프)가 이 함수들을
+호출한다. LangGraph에 의존하지 않으므로 테스트가 서비스 없이 돈다.
 
 네 단계:
 

@@ -42,11 +42,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # 영구 허용: 프로세스 실행은 이 파일에서만.
 ALLOWED_FILES: frozenset[str] = frozenset({"graphs/core/exec.py"})
 
-# P0(GRAPH-15) 시점의 부채. 숫자는 "허용 상한"이며 늘리지 않는다.
-LEGACY_BASELINE: dict[str, int] = {
-    "graphs/logo_design_graph.py": 1,
-    "graphs/asset_craft_graph.py": 1,
-}
+# P0(GRAPH-15) 시점의 부채. GRAPH-21(W4)에서 전부 해소돼 비었다.
+# 항목을 다시 늘리지 않는다 — 신규 직접 실행은 그래프가 아니라 core/exec로 옮긴다.
+LEGACY_BASELINE: dict[str, int] = {}
 
 SUBPROCESS_CALLS = frozenset(
     {

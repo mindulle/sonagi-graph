@@ -210,7 +210,7 @@ def patch_bridge(monkeypatch):
     return apply
 
 
-# ---------------------------------------------------------------- asset_craft 저장소
+# ---------------------------------------------------------------- assets 어댑터 저장소
 
 _IMPORT_CONTENT = """\
 import argparse, json, pathlib
@@ -375,9 +375,13 @@ def _write_script(path: Path, body: str) -> None:
 
 
 @pytest.fixture
-def asset_repo(tmp_path, monkeypatch):
-    """`sonagi-assets` 대역: 스텁 스크립트 + 명부 + 카탈로그 + 토큰."""
-    from graphs import asset_craft_graph as ac
+def asset_repo(tmp_path):
+    """`sonagi-assets` 대역: 스텁 스크립트 + 명부 + 카탈로그 + 토큰.
+
+    경로를 `AssetPaths`로 돌려준다 — 어댑터 호출부가 전역 상수를 monkeypatch하지
+    않고 명시적으로 경로를 넘긴다(그래프가 사라진 뒤의 계약).
+    """
+    from graphs.adapters.assets import AssetPaths
 
     root = tmp_path / "sonagi-assets"
     _write_script(root / "scripts/import_content.py", _IMPORT_CONTENT)
@@ -399,16 +403,13 @@ def asset_repo(tmp_path, monkeypatch):
     )
 
     out_root = tmp_path / "craft-out"
-    monkeypatch.setattr(ac, "ASSETS_DIR", root)
-    monkeypatch.setattr(ac, "CATALOG", catalog)
-    monkeypatch.setattr(ac, "TOKENS", root / "tokens/semantic.json")
-    monkeypatch.setattr(ac, "OUT_ROOT", out_root)
-    monkeypatch.setenv("SONAGI_CATALOG", str(catalog))
-    # ambient env가 결과를 흔들지 않도록 고정한다(원장 서명자·참조 limit).
-    monkeypatch.delenv("SONAGI_CRAFT_BY", raising=False)
-    monkeypatch.delenv("SONAGI_CRAFT_REFS", raising=False)
-
-    return SimpleNamespace(root=root, catalog=catalog, out=out_root)
+    paths = AssetPaths(
+        assets_dir=root,
+        catalog=catalog,
+        tokens=root / "tokens/semantic.json",
+        out_root=out_root,
+    )
+    return SimpleNamespace(root=root, catalog=catalog, out=out_root, paths=paths)
 
 
 # ---------------------------------------------------------------- SearXNG / LLM
