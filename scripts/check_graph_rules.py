@@ -44,7 +44,6 @@ ALLOWED_FILES: frozenset[str] = frozenset({"graphs/core/exec.py"})
 
 # P0(GRAPH-15) 시점의 부채. 숫자는 "허용 상한"이며 늘리지 않는다.
 LEGACY_BASELINE: dict[str, int] = {
-    "graphs/design_ops_graph.py": 4,
     "graphs/logo_design_graph.py": 1,
     "graphs/asset_craft_graph.py": 1,
 }
