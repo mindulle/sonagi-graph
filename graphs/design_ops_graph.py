@@ -1,3 +1,18 @@
+"""DesignOpsGraph: 벡터 아트워크 3안 → VectorCraft 변환 → HITL → 포털 발행.
+
+브리프 하나로 시안 3종(SVG·.vectorcraft·PDF·PNG)을 만들고 `publish` 직전에서
+멈춘다. 디렉터가 `approval_status="approved"`로 재개하면 선택 시안을
+`publish_spec`(slug·에셋 이름·태그·포털 경로)에 따라 포털과 sonagi-assets에
+배포한다.
+
+경로·실행·기록은 `graphs.core`가 소유한다 — 이 파일은 조형과 판단만 맡는다.
+
+환경 변수
+    SONAGI_OUT_ROOT      실행 루트 (기본 /tmp/design_ops)
+    SONAGI_ASSETS_DIR    sonagi-assets 루트 (기본 /home/ubuntu/sonagi-assets)
+    VECTORCRAFT_BIN      VectorCraft CLI (기본 vectorcraft-cli)
+"""
+
 import os
 import sys
 import uuid
@@ -5,7 +20,6 @@ import time
 import json
 import shutil
 import sqlite3
-import subprocess
 from pathlib import Path
 from typing import Annotated, TypedDict, List, Dict, Any, Optional
 
@@ -14,19 +28,55 @@ import brand  # noqa: E402
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 
-# VectorCraft CLI 경로 탐색
-VECTORCRAFT_BIN = shutil.which("vectorcraft-cli") or "/usr/local/bin/vectorcraft-cli"
+from graphs.core import artifacts, env
+from graphs.core import exec as core_exec
+from graphs.core.contract import VerifyResult, error, verify_contract, warning
 
+DEFAULT_BRIEF = "Mindulle Studio Glass Paperweight Dandelion Seal"
+
+# VectorCraft CLI — 이름은 core/env, PATH 해석은 core/exec이 맡는다.
+VECTORCRAFT_BIN = core_exec.which(env.VECTORCRAFT, "/usr/local/bin/vectorcraft-cli")
 
 # 에셋 스토리지 및 카탈로그 설정
-ASSET_HUB_DB_PATH = os.environ.get(
-    "ASSET_HUB_DB_PATH", "/home/ubuntu/sonagi-assets/asset_hub.db"
+ASSET_HUB_DB_PATH = os.environ.get("ASSET_HUB_DB_PATH") or str(
+    env.ASSETS_DIR / "asset_hub.db"
 )
+
+# 발행 기본 대상 — state["publish_spec"]으로 덮어쓴다.
 PORTAL_BRAND_DIR = Path("/home/ubuntu/sonagi-design-system/apps/portal/public/brand")
 STATIC_BRAND_DIR = Path("/home/ubuntu/sonagi-tools/static/brand")
-OUTPUT_TEMP_ROOT = Path("/tmp/design_ops")
+CDN_BRAND_BASE = "https://cdn.sonagi.space/brand"
+
+# 실행 루트. 우선순위(SONAGI_OUT_ROOT → /tmp/design_ops)는 core/env가 계산한다.
+OUTPUT_TEMP_ROOT = env.out_root(
+    "design_ops",
+    {"SONAGI_OUT_ROOT": os.environ.get("SONAGI_OUT_ROOT") or "/tmp/design_ops"},
+)
+CONVERT_TIMEOUT = 120
+
+#: 발행 자산의 확장자 → draft 경로 키.
+ASSET_EXTENSIONS = (
+    ("svg", "svg_path"),
+    ("vectorcraft", "vectorcraft_path"),
+    ("pdf", "pdf_path"),
+    ("png", "png_path"),
+)
+SIZE_KEYS = {
+    "svg_path": "svg_bytes",
+    "vectorcraft_path": "vectorcraft_bytes",
+    "pdf_path": "pdf_bytes",
+    "png_path": "png_bytes",
+}
+
+#: 발행 자산의 확장자 → published_assets 경로 키(svg만 portal_path).
+PUBLISHED_EXTENSIONS = (
+    ("svg", "portal_path"),
+    ("vectorcraft", "vectorcraft_path"),
+    ("pdf", "pdf_path"),
+    ("png", "png_path"),
+)
 
 
 class DesignOpsState(TypedDict):
@@ -40,6 +90,8 @@ class DesignOpsState(TypedDict):
     approval_id: Optional[str]
     feedback: Optional[str]
     published_assets: Dict[str, Any]
+    publish_spec: Optional[Dict[str, Any]]
+    manifest_path: Optional[str]
     status: str
 
 
@@ -50,9 +102,7 @@ def brief_node(state: DesignOpsState) -> Dict[str, Any]:
     print("🎨 [Node: brief_node] 디자인 토큰 및 시안 아키텍처 바인딩 중...")
 
     run_id = state.get("run_id") or str(uuid.uuid4())[:8]
-    brief_text = (
-        state.get("brief") or "Mindulle Studio Glass Paperweight Dandelion Seal"
-    )
+    brief_text = state.get("brief") or DEFAULT_BRIEF
 
     design_tokens = {
         "version": "v3",
@@ -351,17 +401,54 @@ def _generate_svg_monogram_stamp(tokens: Dict[str, Any]) -> str:
 # -------------------------------------------------------------
 # 2. Generator Node: ArtCraft (VectorCraft) 헤드리스 엔진 실행
 # -------------------------------------------------------------
+def write_run_manifest(
+    out_dir: Path,
+    run_id: str,
+    drafts: List[Dict[str, Any]],
+    brief: str,
+    tokens: Dict[str, Any],
+) -> Path:
+    """이번 실행의 산출물·입력을 `manifest.json`에 남긴다(core/artifacts)."""
+    contract_info = tokens.get("contract") or {}
+    entries = []
+    for draft in drafts:
+        for _ext, key in ASSET_EXTENSIONS:
+            entries.append(
+                artifacts.artifact_entry(
+                    draft[key],
+                    root=out_dir,
+                    extra={"draft": draft["id"]},
+                )
+            )
+
+    manifest = artifacts.build_manifest(
+        run_id=run_id,
+        kind="design_ops",
+        inputs={
+            "brief": artifacts.sha256_bytes(brief.encode("utf-8")),
+            "tokens_version": contract_info.get("tokens_version"),
+            "ruleset_version": contract_info.get("ruleset_version"),
+        },
+        artifacts=entries,
+        gates=[{"name": "hitl", "status": "required"}],
+        status="ok",
+        meta={"vectorcraft": VECTORCRAFT_BIN, "drafts": len(drafts)},
+    )
+    return artifacts.write_manifest(out_dir, manifest)
+
+
 def generator_node(state: DesignOpsState) -> Dict[str, Any]:
     print(
         "⚙️ [Node: generator_node] ArtCraft (VectorCraft) 멀티 시안 생성 및 AST 검증 중..."
     )
 
-    run_id = state.get("run_id", "default")
-    out_dir = OUTPUT_TEMP_ROOT / run_id
-    out_dir.mkdir(parents=True, exist_ok=True)
+    run_id = state.get("run_id") or "default"
+    out_dir = artifacts.create_run_dir(OUTPUT_TEMP_ROOT, run_id=run_id, exist_ok=True)
+    commands_log = out_dir / "commands.jsonl"
 
     tokens = state.get("design_tokens", {})
     archetypes = tokens.get("archetypes", [])
+    brief_text = state.get("brief") or DEFAULT_BRIEF
 
     drafts = []
 
@@ -389,32 +476,30 @@ def generator_node(state: DesignOpsState) -> Dict[str, Any]:
         svg_path.write_text(svg_content, encoding="utf-8")
 
         # 2. VectorCraft CLI를 통한 무손실 변환 (.vectorcraft, .pdf, .png)
-        # 2-A: SVG -> .vectorcraft (JSON AST)
-        cmd_vc = [VECTORCRAFT_BIN, "convert", str(svg_path), str(vc_path)]
-        subprocess.run(cmd_vc, check=True, capture_output=True)
-
-        # 2-B: SVG -> .pdf (Vector Print Master)
-        cmd_pdf = [VECTORCRAFT_BIN, "convert", str(svg_path), str(pdf_path)]
-        subprocess.run(cmd_pdf, check=True, capture_output=True)
-
-        # 2-C: SVG -> .png (High-Resolution Raster Preview)
-        cmd_png = [VECTORCRAFT_BIN, "convert", str(svg_path), str(png_path)]
-        subprocess.run(cmd_png, check=True, capture_output=True)
+        for target_path in (vc_path, pdf_path, png_path):
+            core_exec.run(
+                [VECTORCRAFT_BIN, "convert", str(svg_path), str(target_path)],
+                timeout=CONVERT_TIMEOUT,
+                log=commands_log,
+            )
 
         # 3. VectorCraft 문서 구조 추출
         #    `info`·`bench` 서브커맨드는 vectorcraft-cli 0.11에 없다(도움말: mcp·run·commands·convert).
-        #    구조는 `run --cmd document.inspect`로 받고, 시간은 직접 잰다.
-        started = time.time()
-        cmd_inspect = [
-            VECTORCRAFT_BIN,
-            "run",
-            "--in",
-            str(svg_path),
-            "--cmd",
-            "document.inspect",
-        ]
-        inspect_res = subprocess.run(cmd_inspect, capture_output=True, text=True)
-        inspect_ms = int((time.time() - started) * 1000)
+        #    구조는 `run --cmd document.inspect`로 받고, 시간은 core/exec이 잰다.
+        inspect_res = core_exec.run(
+            [
+                VECTORCRAFT_BIN,
+                "run",
+                "--in",
+                str(svg_path),
+                "--cmd",
+                "document.inspect",
+            ],
+            timeout=CONVERT_TIMEOUT,
+            check=False,
+            log=commands_log,
+        )
+        inspect_ms = inspect_res.duration_ms
         inspect: Dict[str, Any] = {}
         for line in inspect_res.stdout.splitlines():
             line = line.strip()
@@ -464,6 +549,8 @@ def generator_node(state: DesignOpsState) -> Dict[str, Any]:
             f"  ✓ {arch['name']} 생성 완료 (Nodes: {draft_item['nodes_count']}, Size: {draft_item['file_sizes']['svg_bytes']}B)"
         )
 
+    manifest_path = write_run_manifest(out_dir, run_id, drafts, brief_text, tokens)
+
     summary_text = (
         f"✨ **ArtCraft (VectorCraft) 멀티 시안 생성 완료 ({len(drafts)}종)**\n\n"
         + "\n".join(
@@ -479,6 +566,7 @@ def generator_node(state: DesignOpsState) -> Dict[str, Any]:
 
     return {
         "drafts": drafts,
+        "manifest_path": str(manifest_path),
         "status": "drafts_generated",
         "messages": [AIMessage(content=summary_text)],
     }
@@ -561,6 +649,67 @@ def register_to_asset_hub(
         print(f"⚠️ [sonagi-assets DB] 등록 중 경고 (DB 접근): {e}")
 
 
+DEFAULT_ASSET_NAME = "민들레 스튜디오 공식 인장 (유리 문진 속 민들레 홀씨)"
+DEFAULT_TAGS = ("brand", "ci", "seal", "vectorcraft", "mindulle")
+
+
+def default_publish_spec() -> Dict[str, Any]:
+    """발행 기본값 — 기존 하드코딩 대상과 동일하게 유지한다."""
+    return {
+        "slug": "mindulle-studio-seal",
+        "asset_name": DEFAULT_ASSET_NAME,
+        "tags": list(DEFAULT_TAGS),
+        "portal_dir": str(PORTAL_BRAND_DIR),
+        "static_dir": str(STATIC_BRAND_DIR),
+        "cdn_base": CDN_BRAND_BASE,
+    }
+
+
+def resolve_publish_spec(state: DesignOpsState) -> Dict[str, Any]:
+    """state의 `publish_spec`을 기본값 위에 덮는다. 모르는 키는 무시한다."""
+    spec = default_publish_spec()
+    for key, value in (state.get("publish_spec") or {}).items():
+        if key in spec and value not in (None, ""):
+            spec[key] = value
+
+    slug = str(spec["slug"]).strip()
+    if not slug or "/" in slug or "\\" in slug or slug in (".", ".."):
+        raise ValueError(f"publish_spec.slug가 올바르지 않다: {slug!r}")
+    spec["slug"] = slug
+    spec["tags"] = [str(tag) for tag in spec.get("tags") or []]
+    return spec
+
+
+def _finalize_manifest(
+    state: DesignOpsState, spec: Dict[str, Any], published_assets: Dict[str, Any]
+) -> Optional[str]:
+    """generator가 남긴 manifest에 승인 게이트와 발행 결과를 덧쓴다."""
+    recorded = state.get("manifest_path")
+    if not recorded:
+        return None
+    path = Path(recorded)
+    if not path.is_file():
+        return None
+
+    manifest = artifacts.read_manifest(path)
+    manifest["status"] = "published"
+    manifest["gates"] = [
+        {"name": "hitl", "status": state.get("approval_status") or "approved"}
+    ]
+    manifest["meta"] = {
+        **(manifest.get("meta") or {}),
+        "publish": {
+            "slug": spec["slug"],
+            "asset_name": spec["asset_name"],
+            "selected_draft": published_assets["selected_draft"],
+            "portal_path": published_assets["portal_path"],
+            "cdn_url": published_assets["cdn_url"],
+        },
+    }
+    artifacts.write_manifest(path, manifest)
+    return str(path)
+
+
 def publish_node(state: DesignOpsState) -> Dict[str, Any]:
     print(
         "🚀 [Node: publish_node] 최종 승인본 포털 배포 및 sonagi-assets 카탈로그 등록 중..."
@@ -576,71 +725,67 @@ def publish_node(state: DesignOpsState) -> Dict[str, Any]:
         selected_idx = 0
 
     approved_draft = drafts[selected_idx]
+    spec = resolve_publish_spec(state)
+    slug = spec["slug"]
+    portal_dir = Path(spec["portal_dir"])
+    static_dir = Path(spec["static_dir"])
+    cdn_url = f"{str(spec['cdn_base']).rstrip('/')}/{slug}.svg"
 
-    PORTAL_BRAND_DIR.mkdir(parents=True, exist_ok=True)
-    STATIC_BRAND_DIR.mkdir(parents=True, exist_ok=True)
+    portal_dir.mkdir(parents=True, exist_ok=True)
+    static_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. 파일 복사 및 배포
-    target_svg = PORTAL_BRAND_DIR / "mindulle-studio-seal.svg"
-    target_vc = PORTAL_BRAND_DIR / "mindulle-studio-seal.vectorcraft"
-    target_pdf = PORTAL_BRAND_DIR / "mindulle-studio-seal.pdf"
-    target_png = PORTAL_BRAND_DIR / "mindulle-studio-seal.png"
-
-    shutil.copy2(approved_draft["svg_path"], target_svg)
-    shutil.copy2(approved_draft["vectorcraft_path"], target_vc)
-    shutil.copy2(approved_draft["pdf_path"], target_pdf)
-    shutil.copy2(approved_draft["png_path"], target_png)
-
-    # 정적 백업 디렉토리에도 동기화
-    shutil.copy2(
-        approved_draft["svg_path"], STATIC_BRAND_DIR / "mindulle-studio-seal.svg"
-    )
-    shutil.copy2(
-        approved_draft["vectorcraft_path"],
-        STATIC_BRAND_DIR / "mindulle-studio-seal.vectorcraft",
-    )
-    shutil.copy2(
-        approved_draft["pdf_path"], STATIC_BRAND_DIR / "mindulle-studio-seal.pdf"
-    )
-    shutil.copy2(
-        approved_draft["png_path"], STATIC_BRAND_DIR / "mindulle-studio-seal.png"
-    )
+    # 1. 파일 복사 및 배포 — 파일명은 slug에서만 나온다(시각 없음).
+    targets: Dict[str, Path] = {}
+    for ext, source_key in ASSET_EXTENSIONS:
+        target = portal_dir / f"{slug}.{ext}"
+        shutil.copy2(approved_draft[source_key], target)
+        shutil.copy2(approved_draft[source_key], static_dir / target.name)
+        targets[ext] = target
 
     # 2. sonagi-assets 카탈로그 등록
     asset_id = str(uuid.uuid4()).upper()
-    cdn_url = "https://cdn.sonagi.space/brand/mindulle-studio-seal.svg"
+    tags = list(spec["tags"])
+    if approved_draft["id"] not in tags:
+        tags.append(approved_draft["id"])
     register_to_asset_hub(
         item_id=asset_id,
-        name="민들레 스튜디오 공식 인장 (유리 문진 속 민들레 홀씨)",
+        name=spec["asset_name"],
         ext="svg",
-        tags=["brand", "ci", "seal", "vectorcraft", "mindulle", approved_draft["id"]],
+        tags=tags,
         cdn_url=cdn_url,
-        original_path=str(target_svg),
+        original_path=str(targets["svg"]),
     )
 
     published_assets = {
+        "slug": slug,
+        "asset_name": spec["asset_name"],
+        "tags": tags,
         "selected_draft": approved_draft["name"],
         "asset_id": asset_id,
         "cdn_url": cdn_url,
-        "portal_path": str(target_svg),
-        "vectorcraft_path": str(target_vc),
-        "pdf_path": str(target_pdf),
-        "png_path": str(target_png),
+        "portal_dir": str(portal_dir),
+        "static_dir": str(static_dir),
+        "portal_path": str(targets["svg"]),
+        "vectorcraft_path": str(targets["vectorcraft"]),
+        "pdf_path": str(targets["pdf"]),
+        "png_path": str(targets["png"]),
         "file_sizes": {
-            "svg": target_svg.stat().st_size,
-            "vectorcraft": target_vc.stat().st_size,
-            "pdf": target_pdf.stat().st_size,
-            "png": target_png.stat().st_size,
+            ext: targets[ext].stat().st_size
+            for ext in ("svg", "vectorcraft", "pdf", "png")
         },
     }
 
+    manifest_path = _finalize_manifest(state, spec, published_assets)
+    if manifest_path:
+        published_assets["manifest_path"] = manifest_path
+
     final_msg = (
-        f"🎉 **[배포 완료] 민들레 스튜디오 CI 시각 자산 영구 자산화 성공!**\n\n"
+        f"🎉 **[배포 완료] {spec['asset_name']}**\n\n"
         f"- **선정 시안**: `{approved_draft['name']}` ({approved_draft['description']})\n"
         f"- **공식 CDN 배포**: {cdn_url}\n"
-        f"- **포털 런타임**: `{target_svg}`\n"
-        f"- **VectorCraft 원본 AST**: `{target_vc}` ({published_assets['file_sizes']['vectorcraft']} bytes)\n"
-        f"- **인쇄용 무손실 PDF**: `{target_pdf}` ({published_assets['file_sizes']['pdf']} bytes)\n"
+        f"- **포털 런타임**: `{targets['svg']}`\n"
+        f"- **VectorCraft 원본 AST**: `{targets['vectorcraft']}` ({published_assets['file_sizes']['vectorcraft']} bytes)\n"
+        f"- **인쇄용 무손실 PDF**: `{targets['pdf']}` ({published_assets['file_sizes']['pdf']} bytes)\n"
         f"- **sonagi-assets 카탈로그 ID**: `{asset_id}`"
     )
 
@@ -652,7 +797,244 @@ def publish_node(state: DesignOpsState) -> Dict[str, Any]:
 
 
 # -------------------------------------------------------------
-# 5. Graph Compilation
+# 5. Verify: core/contract 계약 — 시안·발행 산출물 판정
+# -------------------------------------------------------------
+class DesignOpsInput(TypedDict, total=False):
+    messages: list
+    run_id: str
+    brief: str
+    selected_draft_index: int
+    approval_status: str
+    publish_spec: Dict[str, Any]
+
+
+class DesignOpsOutput(TypedDict, total=False):
+    drafts: List[Dict[str, Any]]
+    published_assets: Dict[str, Any]
+    manifest_path: str
+    status: str
+
+
+def _verify_drafts(state: DesignOpsState, drafts: List[Dict[str, Any]]) -> List[Any]:
+    issues: List[Any] = []
+    archetypes = (state.get("design_tokens") or {}).get("archetypes") or []
+    expected = len(archetypes) or len(drafts)
+    if len(drafts) != expected:
+        issues.append(
+            error(
+                "draft_count",
+                f"시안 {expected}종 기대, {len(drafts)}종 받음",
+                "drafts",
+            )
+        )
+
+    for draft in drafts:
+        label = draft.get("id") or draft.get("name") or "draft"
+        for _ext, key in ASSET_EXTENSIONS:
+            raw = draft.get(key)
+            if not raw:
+                issues.append(error("missing_path", f"{label}: {key}가 없다", key))
+                continue
+            path = Path(raw)
+            if not path.is_file():
+                issues.append(
+                    error("missing_file", f"{label}: 파일이 없다 — {raw}", key)
+                )
+                continue
+            actual = path.stat().st_size
+            size_key = SIZE_KEYS[key]
+            recorded = (draft.get("file_sizes") or {}).get(size_key)
+            if actual <= 0:
+                issues.append(error("empty_file", f"{label}: {key}가 0바이트", key))
+            elif recorded != actual:
+                issues.append(
+                    warning(
+                        "stale_size",
+                        f"{label}: {size_key} 기록 {recorded} ≠ 실제 {actual}",
+                        size_key,
+                    )
+                )
+        if not draft.get("nodes_count"):
+            issues.append(
+                warning(
+                    "empty_document",
+                    f"{label}: VectorCraft 문서에 객체가 없다",
+                    "nodes_count",
+                )
+            )
+    return issues
+
+
+def _verify_published(published: Dict[str, Any]) -> List[Any]:
+    issues: List[Any] = []
+    for key in ("slug", "asset_id", "cdn_url"):
+        if not published.get(key):
+            issues.append(
+                error(
+                    "missing_key",
+                    f"published_assets.{key}가 없다",
+                    f"published_assets.{key}",
+                )
+            )
+
+    slug = published.get("slug")
+    cdn_url = published.get("cdn_url") or ""
+    if slug and not cdn_url.endswith(f"/{slug}.svg"):
+        issues.append(
+            error(
+                "cdn_slug_mismatch",
+                f"CDN URL이 slug와 맞지 않는다: {cdn_url}",
+                "published_assets.cdn_url",
+            )
+        )
+
+    sizes = published.get("file_sizes") or {}
+    for ext, key in PUBLISHED_EXTENSIONS:
+        raw = published.get(key)
+        if not raw:
+            issues.append(
+                error(
+                    "missing_path",
+                    f"published_assets.{key}가 없다",
+                    f"published_assets.{key}",
+                )
+            )
+            continue
+        path = Path(raw)
+        if slug and path.name != f"{slug}.{ext}":
+            issues.append(
+                error(
+                    "filename_slug_mismatch",
+                    f"파일명이 slug와 맞지 않는다: {path.name}",
+                    f"published_assets.{key}",
+                )
+            )
+        if not path.is_file():
+            issues.append(
+                error(
+                    "missing_file",
+                    f"발행 파일이 없다 — {raw}",
+                    f"published_assets.{key}",
+                )
+            )
+            continue
+        actual = path.stat().st_size
+        if actual <= 0:
+            issues.append(
+                error("empty_file", f"{path.name}가 0바이트", f"published_assets.{key}")
+            )
+        elif ext in sizes and sizes[ext] != actual:
+            issues.append(
+                warning(
+                    "stale_size",
+                    f"{path.name}: 기록 {sizes[ext]} ≠ 실제 {actual}",
+                    f"published_assets.file_sizes.{ext}",
+                )
+            )
+    return issues
+
+
+class DesignOpsContract:
+    """`graphs.core.contract`가 읽는 design_ops 계약."""
+
+    name = "design_ops"
+    inputs = DesignOpsInput
+    outputs = DesignOpsOutput
+
+    def verify(self, state: DesignOpsState) -> VerifyResult:
+        drafts = state.get("drafts") or []
+        published = state.get("published_assets") or {}
+        if not drafts and not published:
+            return VerifyResult(
+                issues=(
+                    error(
+                        "no_stage",
+                        "검증할 단계가 없다 — drafts 또는 published_assets가 필요하다",
+                    ),
+                ),
+                checks=("stage",),
+                name=self.name,
+            )
+
+        checks: List[str] = []
+        issues: List[Any] = []
+        if drafts:
+            checks.append("drafts")
+            issues.extend(_verify_drafts(state, drafts))
+        if published:
+            checks.append("published")
+            issues.extend(_verify_published(published))
+        return VerifyResult(issues=tuple(issues), checks=tuple(checks), name=self.name)
+
+
+CONTRACT = DesignOpsContract()
+
+
+def verify(state: DesignOpsState, *, stage: str = "output") -> VerifyResult:
+    """core/contract로 design_ops state를 판정한다."""
+    return verify_contract(CONTRACT, state, stage=stage)
+
+
+def verify_hitl(
+    brief: str = DEFAULT_BRIEF,
+    publish_spec: Optional[Dict[str, Any]] = None,
+    *,
+    selected_draft_index: int = 0,
+) -> Dict[str, Any]:
+    """HITL 배선 검증 — publish 직전 중단 → 승인 → 발행 → 판정.
+
+    VectorCraft CLI가 필요하므로 CI가 아니라 수동/실장비에서 부른다.
+    (구 `scripts/verify_design_ops_hitl.py`를 흡수했다.)
+    """
+    from langgraph.checkpoint.memory import MemorySaver
+
+    graph = build_graph(checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": str(uuid.uuid4())}}
+    initial: Dict[str, Any] = {
+        "messages": [],
+        "brief": brief,
+        "run_id": f"verify-{uuid.uuid4().hex[:8]}",
+    }
+    if publish_spec:
+        initial["publish_spec"] = publish_spec
+
+    for _event in graph.stream(initial, config=config):
+        pass
+
+    paused = graph.get_state(config)
+    if "publish" not in paused.next:
+        return {
+            "interrupted": False,
+            "published_assets": None,
+            "verification": VerifyResult(
+                issues=(
+                    error(
+                        "no_interrupt",
+                        "publish 직전에서 멈추지 않았다 — 배선을 확인하세요",
+                    ),
+                ),
+                checks=("hitl",),
+                name=CONTRACT.name,
+            ).to_dict(),
+        }
+
+    graph.update_state(
+        config,
+        {"approval_status": "approved", "selected_draft_index": selected_draft_index},
+    )
+    for _event in graph.stream(None, config=config):
+        pass
+
+    final_state = graph.get_state(config).values
+    return {
+        "interrupted": True,
+        "published_assets": final_state.get("published_assets"),
+        "verification": verify(final_state).to_dict(),
+    }
+
+
+# -------------------------------------------------------------
+# 6. Graph Compilation
 # -------------------------------------------------------------
 def build_graph(checkpointer=None):
     builder = StateGraph(DesignOpsState)
@@ -668,9 +1050,10 @@ def build_graph(checkpointer=None):
     builder.add_edge("hitl_checkpoint", "publish")
     builder.add_edge("publish", END)
 
-
     # publish 노드 진입 직전에 인터럽트(중단)하여 인간 디렉터의 승인을 받습니다.
-    compiled_graph = builder.compile(checkpointer=checkpointer, interrupt_before=["publish"])
+    compiled_graph = builder.compile(
+        checkpointer=checkpointer, interrupt_before=["publish"]
+    )
     return compiled_graph
 
 
