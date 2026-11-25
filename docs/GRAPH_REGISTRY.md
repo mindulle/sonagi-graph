@@ -1,0 +1,100 @@
+# Graph Registry — 정비 인벤토리 (P0)
+
+> 목적: 15개 그래프를 **유지·통합·폐기**로 분류하고, 어디서 무엇을 흡수할지 고정한다.
+> 이 문서가 P1(core)·P2(검증)·P3(마이그레이션)의 기준표다.
+
+- 최초 작성: 2026-11-25
+- 대상: `graphs/*_graph.py` 15개, `scripts/` 5개
+- 원칙: **반복되는 일은 그래프, 한 번짜리는 스크립트 — 단 스크립트도 core 위에서.**
+
+---
+
+## 1. 분류표
+
+| 그래프 | 목적 | 노드 | 직접 subprocess | 테스트 | 결정 | 목표 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `entry_pack` | 콘테스트 엔트리 변주·검증·포장 | 10 | 2 | ✅ | **KEEP (1순위)** | core 이관 + profile(web/brand/print) |
+| `video_ops` | 브리프 → EffectCraft → FilmCraft → CDN | 5 | 5 | ✅ | **KEEP (1순위)** | core 이관 (subprocess 5→0) |
+| `design_ops` | 벡터 아트워크 생성 → PDF/PNG → asset_hub | 4 | 4 | ✅ | **KEEP (1순위)** | core 이관 + publish 하드코딩 제거 |
+| `editorial_verification` | 글 4대 검증 | 6 | 0 | ✅ | KEEP | core 계약 적용 |
+| `visual_consistency` | 벡터·모션·이미지 일관성 | 5 | 0 | ✅ | KEEP | core 계약 적용 |
+| `copywriting_craft` | 클리셰 필터 → 카피 3안 | 5 | 0 | ✅ | KEEP | core 계약 적용 |
+| `design_token_sync` | 토큰 컴파일 → Figma | 5 | 0 | ❌ | KEEP | 테스트 추가 |
+| `knowledge_harvester` | 공공 아카이브 수집 | 8 | 0 | ✅ | KEEP | core 계약 적용 |
+| `source_verification` | SearXNG 검증 | 4 | 0 | ❌ | KEEP | 테스트 추가 |
+| `market_intelligence` | 시장 수집·분석 | 4 | 0 | ❌ | KEEP | 테스트 추가 |
+| `error_triage` | Sentry 오류 분석 | 3 | 0 | ✅ | KEEP | core 계약 적용 |
+| `asset_craft` | 렌더 후보 생성·선택 | 7 | 1 | ❌ | **MERGE** | `core/assets` 어댑터로 흡수, 독립 그래프 등록 해제 |
+| `logo_design` | 로고 패키지 검증 (press 이후) | 10 | 1 | ✅ | **MERGE (조건부)** | `entry_pack` brand profile이 context_test·critic·print_prep 흡수 후 폐기 |
+| `package_series` | 3건 배치 납품 | 4 | 0 | ✅ | **MERGE (조건부)** | brand profile의 배치 모드로 흡수 |
+| `spike_test` | 스파이크 | 2 | 0 | ❌ | **DELETE** | 등록 해제 |
+
+### 판정 요약
+
+- KEEP: 11 (그중 1순위 3개)
+- MERGE: 3 (`asset_craft`, `logo_design`, `package_series`)
+- DELETE: 1 (`spike_test`)
+
+---
+
+## 2. 흡수 대상 (스크립트 → 그래프/core)
+
+| 현재 | 문제 | 흡수 위치 |
+| --- | --- | --- |
+| `scripts/verify_design_ops_hitl.py` | 그래프 밖 일회성 검증 | `design_ops`의 `verify()` |
+| `scripts/verify_knowledge_harvester.py` | 동일 | `knowledge_harvester`의 `verify()` |
+| `scripts/verify_video_ops.py` | 동일 | `video_ops`의 `verify()` |
+| `scripts/inkscape_shim.py` | 변환기 shim이 그래프마다 재구현 | `core/exec` 또는 `core/assets` |
+| `ASSETS_DIR`·`CATALOG`·`TOKENS`·`OUT_ROOT` 반복 선언 | 경로 불일치 위험 | `core/env` |
+| `_run` 중복 구현 (entry_pack, asset_craft, logo_design, video_ops, design_ops) | 타임아웃·에러 형식 제각각 | `core/exec` |
+| `graph_cli.py` | 실행/승인만 지원 | `runs`에 ledger 조회 추가 |
+
+---
+
+## 3. 검증 등급 (모든 그래프 공통)
+
+| 등급 | 내용 | 강제 |
+| --- | --- | --- |
+| L0 | 임포트·컴파일 | CI |
+| L1 | 노드 단위 테스트 | CI |
+| L2 | fixture E2E (네트워크 없음) | CI |
+| L3 | 결정론 (같은 입력 2회 → 동일 해시) | CI (해당 그래프) |
+| L4 | 실데이터 스모크 (수동, 릴리즈 전) | 체크리스트 |
+
+**완료 기준**: KEEP 그래프 전부 L2 이상, 결정론 대상은 L3.
+
+---
+
+## 4. 실행 웨이브
+
+| 웨이브 | 작업 | 병렬 | 선행 |
+| --- | --- | --- | --- |
+| **W1** | `core/` (env·exec·artifacts·contract·hitl) | — | 없음 |
+| **W1** | 검증 표준 + 미테스트 5개 그래프 테스트 | ✅ core와 병렬 | 없음 |
+| **W1** | 가드레일 (PR 체크리스트, 직접 subprocess lint) | ✅ | 없음 |
+| **W2** | `entry_pack` core 이관 | ✅ | W1 core |
+| **W2** | `video_ops` core 이관 | ✅ | W1 core |
+| **W2** | `design_ops` core 이관 | ✅ | W1 core |
+| **W3** | profile 4종 (web/brand/print/social) | ❌ (같은 파일) | W2 entry_pack |
+| **W4** | 흡수·폐기 (`asset_craft`→core, `logo_design`/`package_series`→brand, `spike_test` 삭제) | ✅ | W3 |
+| **W5** | ledger 조회 (`graph_cli runs --json`) | ✅ | W1 artifacts |
+
+---
+
+## 5. 완료 정의 (Definition of Done)
+
+1. KEEP 그래프 전부: 입력 스키마 + `verify()` + L2 테스트
+2. CI에서 네트워크 없이 전 그래프 스모크
+3. 결정론 그래프: 같은 입력 2회 동일 해시
+4. `graph_cli runs`로 입력·게이트·산출 해시 조회
+5. `graphs/*_graph.py` 내 직접 `subprocess.run` 0 (lint 차단)
+6. 신규 작업은 profile 1파일 추가로 끝남
+7. `spike_test` 삭제, `asset_craft` 독립 등록 해제
+
+---
+
+## 6. 리스크
+
+- **과도한 추상화**: core가 두꺼워지면 그래프 하나 고치려고 core를 고쳐야 한다. core는 실행·경로·기록까지만.
+- **동시 편집 충돌**: W2의 세 그래프는 파일이 분리돼 있으나 core 인터페이스 변경은 한 곳에서만.
+- **결정론 오판**: 외부 API(LLM·SearXNG)를 쓰는 그래프는 L3 대상이 아니다. 렌더·변환 계열만 적용.
