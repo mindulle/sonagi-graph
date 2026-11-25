@@ -98,3 +98,42 @@
 - **과도한 추상화**: core가 두꺼워지면 그래프 하나 고치려고 core를 고쳐야 한다. core는 실행·경로·기록까지만.
 - **동시 편집 충돌**: W2의 세 그래프는 파일이 분리돼 있으나 core 인터페이스 변경은 한 곳에서만.
 - **결정론 오판**: 외부 API(LLM·SearXNG)를 쓰는 그래프는 L3 대상이 아니다. 렌더·변환 계열만 적용.
+
+---
+
+## 7. 가드레일 (P5)
+
+> 목적: 그래프·core를 우회하는 임시 스크립트와 직접 실행을 **PR 단계에서** 막는다.
+
+### 7.1 직접 실행 lint
+
+`python3 scripts/check_graph_rules.py` — CI `guardrails` job에서 돈다. 표준 라이브러리만 쓰므로 설치 단계가 없다.
+
+- 원칙: 프로세스 실행은 `graphs/core/exec.py` 한 곳에서만. `graphs/**` 에서 `subprocess.{run,Popen,call,check_call,check_output,getoutput,getstatusoutput}`, `os.system`·`os.popen`, `asyncio.create_subprocess_*` 직접 호출 금지(import 자체는 허용).
+- 허용 목록은 스크립트 안의 두 상수로만 관리한다.
+  - `ALLOWED_FILES` = `graphs/core/exec.py` — W1에서 도입된 유일한 실행 지점. core가 아직 없거나 이 파일에 호출이 0건이어도 lint는 통과한다.
+  - `LEGACY_BASELINE` = P0 시점의 기존 위반(파일별 허용 상한). 아래 표가 정본이며 **늘리지 않는다**.
+
+| 파일 | baseline | 해소 시점 |
+| --- | --- | --- |
+| `graphs/video_ops_graph.py` | 5 | W2 video_ops core 이관 |
+| `graphs/design_ops_graph.py` | 4 | W2 design_ops core 이관 |
+| `graphs/entry_pack_graph.py` | 2 | W2 entry_pack core 이관 |
+| `graphs/logo_design_graph.py` | 1 | W4 logo_design 병합 |
+| `graphs/asset_craft_graph.py` | 1 | W4 asset_craft 흡수 |
+
+- 동작: 신규 파일의 직접 호출, 또는 baseline을 넘는 추가 호출이 있으면 exit 1. baseline보다 줄면 "항목을 삭제하세요" 안내만 낸다(실패 아님).
+- W4 종료 후 `--strict`(baseline 무시)를 CI 기본값으로 올린다. 그때가 §5 완료 정의 5번이 닫히는 지점이다.
+- 로컬 확인: `python3 scripts/check_graph_rules.py --path <파일 또는 디렉터리>`.
+
+### 7.2 PR 체크리스트
+
+`.github/pull_request_template.md` 가 모든 PR에 자동 적용된다. 항목은 입력 스키마, `verify()`, 테스트(L1/L2), 결정론(L3, 해당 시), 이 문서(그래프 레지스트리), 직접 실행 없음.
+
+### 7.3 스크립트 수명 규칙
+
+- 실험·일회성 스크립트는 **`scripts/expiring/`** 에만 둔다. 상시 운영 스크립트(`graph_cli.py`)는 `scripts/` 루트에 둔다.
+- 파일 상단 docstring에 `owner`(책임자), `expires`(YYYY-MM-DD), `purpose`(한 줄)를 반드시 적는다.
+- 만료일이 지난 스크립트는 삭제하거나 그래프의 `verify()`/`core`로 흡수한다. 리뷰에서 만료일을 확인한다.
+- 반복해서 쓰게 된 스크립트는 스크립트로 남기지 않고 그래프 노드나 `core/`로 승격한다 — §2의 흡수 대상이 그 결과다.
+
