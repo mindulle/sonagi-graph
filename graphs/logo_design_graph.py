@@ -1,17 +1,20 @@
 """Package Delivery Graph — 인간 로고 디자이너를 흉내내는 통합 파이프라인.
 
-브리프 → research → constraints → concept → press(결정론) → asset craft(LLM) →
+브리프 → research → constraints → concept → asset craft(LLM) →
 context_test(결정론) → critic → select → refine(루프) → HITL → publish
+
+마크는 이 그래프가 만들지 않는다. VectorCraft·DesignCraft 같은 편집 도구에서
+만든 SVG를 `mark_path`로 넘기거나(`mark_source="existing"`), 마크 없이
+레이아웃만 검증한다(`mark_source="none"`).
 
 ```
 brief
   │
   ▼
-concept (LLM: 5~10개 텍스트 방향, 픽셀 없음)
+concept (LLM: 3~5개 텍스트 방향, 픽셀 없음)
   │
   ▼
 ┌─ router ──────────────────────────────────────┐
-│  mark_source="generate" → press_mark (결정론)  │
 │  mark_source="existing" → load_mark            │
 │  mark_source="none"     → (건너뜀)             │
 └───────────────────────────────────────────────┘
@@ -38,8 +41,9 @@ critic (규칙 기반 + LLM 점수)
     config = {"configurable": {"thread_id": "logo-1"}}
     graph.invoke({
         "brief": "민들레 스튜디오 로고 — 차분하고 고급스러운 인쇄물",
-        "mark_source": "generate",
-        "concept": "monogram",       # press concept (선택)
+        "mark_source": "existing",   # 또는 "none"
+        "mark_path": "/path/to/mark.svg",
+        "concept": "여백을 살린 미니멀 모노그램",  # 방향 힌트 (선택)
         "content": "/path/to/brief.md",
         "print_spec": {"bleed_mm": 3, "cmyk": True, "cmyk_profile": "ISO Coated v2"},
         "max_iterations": 2,
@@ -48,11 +52,9 @@ critic (규칙 기반 + LLM 점수)
     # hitl에서 멈춘다. 검토 후 approval_status="approved"로 재개.
 """
 
-import json
 import os
 import subprocess
 import sys
-import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
@@ -66,22 +68,30 @@ from pydantic import BaseModel, Field
 from graphs.llm import chat_model
 from graphs.asset_craft_graph import build_graph as build_craft
 
-PRESS_DIR = Path(os.environ.get("SONAGI_PRESS_DIR", "/home/ubuntu/sonagi-work"))
-PRESS_GRAPH = PRESS_DIR / "tools" / "press_graph.py"
 ASSETS_DIR = Path(os.environ.get("SONAGI_ASSETS_DIR", "/home/ubuntu/sonagi-assets"))
 OUT_ROOT = Path(os.environ.get("SONAGI_PACKAGE_OUT", "/tmp/package_delivery"))
 VECTORCRAFT = os.environ.get("VECTORCRAFT_BIN", "vectorcraft-cli")
 
 
 class ConceptDirection(BaseModel):
-    title: str = Field(description="방향 이름 (예: '미니멀 모노그램', '네거티브 스페이스 동물')")
+    title: str = Field(
+        description="방향 이름 (예: '미니멀 모노그램', '네거티브 스페이스 동물')"
+    )
     description: str = Field(description="1~2문장 설명")
-    press_concept: str = Field(description="press concept 중 하나: seed_dispersal, press_imprint, ink_overlap, monogram, negative_space, mascot")
-    territory_hint: str = Field(description="추천 territory (예: monogram_overlap, negative_hidden)")
+    motifs: List[str] = Field(
+        default_factory=list,
+        description="이 방향에서 쓸 형태 모티프 2~4개 (예: '겹친 이니셜', '원 안의 여백', '활자 압인')",
+    )
+    visual_language: str = Field(
+        default="",
+        description="선·면·질감·비례에 대한 구체적 지시 (편집 도구에서 그릴 수 있을 만큼)",
+    )
 
 
 class ConceptOutput(BaseModel):
-    directions: List[ConceptDirection] = Field(description="3~5개의 서로 다른 시각 방향")
+    directions: List[ConceptDirection] = Field(
+        description="3~5개의 서로 다른 시각 방향"
+    )
 
 
 class PackageDeliveryState(TypedDict, total=False):
@@ -89,15 +99,12 @@ class PackageDeliveryState(TypedDict, total=False):
     research_summary: Optional[str]
     skip_research: bool
     skip_vision: bool
-    recommended_concept: Optional[str]
-    concept: Optional[str]  # press concept (직접 지정 시)
+    concept: Optional[str]  # 방향 힌트 (자유 텍스트)
     concepts: List[Dict[str, Any]]  # LLM 생성 방향 목록
-    selected_concept: Optional[str]  # 선택된 방향의 press_concept
-    mark_source: str  # "generate" | "existing" | "none"
+    selected_concept: Optional[str]  # 선택된 방향의 제목
+    mark_source: str  # "existing" | "none"
     mark_path: Optional[str]
     mark_svg: Optional[str]
-    press_run_dir: Optional[str]
-    press_selected: List[Dict[str, Any]]
     content: Optional[str]
     deliverables: List[str]
     print_spec: Optional[Dict[str, Any]]
@@ -122,40 +129,25 @@ class PackageDeliveryState(TypedDict, total=False):
 # ---------------------------------------------------------------------------
 
 
-def _run_subprocess(args, cwd=None, env=None):
-    import os as _os
-
-    run_env = dict(env or os.environ)
-    # press가 부르는 `inkscape`를 vectorcraft-cli로 넘기는 shim
-    shim_dir = _ensure_inkscape_shim()
-    if shim_dir:
-        run_env["PATH"] = shim_dir + os.pathsep + run_env.get("PATH", "")
-    done = subprocess.run(
-        [sys.executable, *map(str, args)] if not str(args[0]).endswith(".py") else ["python3", *map(str, args)],
-        capture_output=True,
-        text=True,
-        cwd=str(cwd) if cwd else None,
-        env=run_env,
-    )
-    if done.returncode != 0:
-        raise RuntimeError(
-            f"실패: {' '.join(map(str, args))}\n{done.stdout[-500:]}\n{done.stderr[-500:]}"
-        )
-    return done
-
-
 _SHIM_DIR = None
 
 
-def _ensure_inkscape_shim():
+def _ensure_converter_shim():
+    """`inkscape` 호출을 vectorcraft-cli로 넘기는 PATH shim.
+
+    context_test가 SVG를 PNG로 래스터화할 때 일부 변환기가 inkscape를 찾는다.
+    같은 변환기로 연결해 외부 의존 없이 돌게 한다.
+    """
     global _SHIM_DIR
     if _SHIM_DIR:
         return _SHIM_DIR
+    import tempfile
+
     repo_root = Path(__file__).resolve().parent.parent
     shim_py = repo_root / "scripts" / "inkscape_shim.py"
     if not shim_py.exists():
         return None
-    d = Path(tempfile.mkdtemp(prefix="press-shim-"))
+    d = Path(tempfile.mkdtemp(prefix="vc-shim-"))
     wrapper = d / "inkscape"
     wrapper.write_text(f'#!/bin/sh\nexec python3 "{shim_py}" "$@"\n', encoding="utf-8")
     wrapper.chmod(0o755)
@@ -171,95 +163,63 @@ def _ensure_inkscape_shim():
 def concept_node(state: PackageDeliveryState) -> Dict[str, Any]:
     """LLM이 3~5개의 서로 다른 시각 방향을 텍스트로 생성한다 (픽셀 없음).
 
-    인간 디자이너의 '스케치' 단계에 해당한다. 각 방향은 press concept에 매핑된다.
+    인간 디자이너의 '스케치' 단계에 해당한다. 나온 방향은 편집 도구에서
+    그릴 수 있도록 모티프와 시각 언어로 구체화된다.
     """
     brief = state.get("brief", "")
     research = state.get("research_summary", "")
     if research:
         brief = f"{brief}\n\n[레퍼런스 분석]\n{research}"
-    llm = chat_model("LOGO_CONCEPT_LLM_MODEL", default_model="gemini-3-flash", temperature=0.4)
+    llm = chat_model(
+        "LOGO_CONCEPT_LLM_MODEL", default_model="gemini-3-flash", temperature=0.4
+    )
     structured = llm.with_structured_output(ConceptOutput)
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system",
-         "당신은 로고 디자이너입니다. 브리프를 읽고 3~5개의 서로 다른 시각 방향을 제안하세요.\n"
-         "각 방향은 다음 press concept 중 하나에 매핑됩니다:\n"
-         "- seed_dispersal: 씨앗·날림 (유기적, 자연, 성장)\n"
-         "- press_imprint: 활자·압인 (전통적, 장인, 신뢰)\n"
-         "- ink_overlap: 잉크·겹침 (창의적, 현대적, 레이어)\n"
-         "- monogram: 모노그램·글자 (타이포 중심, 미니멀)\n"
-         "- negative_space: 네거티브 스페이스 (이중독해, 지적)\n"
-         "- mascot: 마스코트·캐릭터 (친근, 접근성)\n\n"
-         "서로 시각적으로 구분되는 방향을 제안하세요. 비슷한 방향 2개는 피하세요."),
-        ("user", "브리프: {brief}"),
-    ])
+    direction_hint = state.get("concept")
+    if direction_hint:
+        brief = f"{brief}\n\n[방향 힌트]\n{direction_hint}"
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "당신은 로고 디자이너입니다. 브리프를 읽고 3~5개의 서로 다른 시각 방향을 제안하세요.\n"
+                "이 파이프라인은 마크를 직접 그리지 않습니다. 결과물은 VectorCraft·DesignCraft 같은\n"
+                "편집 도구에서 사람이 그릴 수 있을 만큼 구체적이어야 합니다.\n"
+                "각 방향에 형태 모티프 2~4개와, 선·면·질감·비례에 대한 시각 언어를 적으세요.\n"
+                "서로 시각적으로 구분되는 방향을 제안하고, 비슷한 방향 2개는 피하세요.",
+            ),
+            ("user", "브리프: {brief}"),
+        ]
+    )
 
     try:
         result = (prompt | structured).invoke({"brief": brief})
         directions = [d.model_dump() for d in result.directions]
-    except Exception as e:
-        # LLM 실패 시 기본 방향 1개
-        directions = [{"title": "기본 방향", "description": "브리프 기반", "press_concept": "press_imprint", "territory_hint": "seal_frame"}]
-
-    # 사용자가 concept을 직접 지정했으면それを 우선
-    # concept alias: 없음 (모든 concept이 press에 실제 존재)
-    CONCEPT_ALIASES = {}
-    override = state.get("concept") or state.get("recommended_concept")
-    if override:
-        resolved = CONCEPT_ALIASES.get(override, override)
-        for d in directions:
-            d["press_concept"] = resolved
-
-    # territory 검증: 존재하지 않는 territory는 가장 가까운 것으로 보정
-    valid_territories = set()
-    try:
-        import sys as _sys
-        _sys.path.insert(0, str(PRESS_DIR / "tools"))
-        import press_ops as _po
-        valid_territories = set(_po.OPS_TERRITORIES.keys()) | set(
-            ["seed_rise", "seal_frame", "type_block", "orbit_ring", "layer_stack", "cut_field",
-             "repeat_petals", "mirror_gate", "subtract_dots", "plume_arc", "stamp_bar", "offset_duo"]
-        )
     except Exception:
-        pass
+        # LLM 실패 시 기본 방향 1개
+        directions = [
+            {
+                "title": "기본 방향",
+                "description": "브리프 기반",
+                "motifs": [],
+                "visual_language": "",
+            }
+        ]
 
-    # concept 검증
-    valid_concepts = {"seed_dispersal", "press_imprint", "ink_overlap", "monogram", "negative_space", "mascot", "wordmark", "lettermark", "emblem"}
     for d in directions:
-        pc = d.get("press_concept")
-        if pc in CONCEPT_ALIASES:
-            d["press_concept"] = CONCEPT_ALIASES[pc]
-        elif pc not in valid_concepts:
-            d["press_concept"] = "press_imprint"
-        # territory_hint 검증: 가장 가까운 유효 territory로 보정
-        if d.get("territory_hint") and valid_territories and d["territory_hint"] not in valid_territories:
-            hint = d["territory_hint"]
-            # 가장 긴 공통 접두사를 가진 territory 선택
-            best = None
-            best_score = -1
-            for t in valid_territories:
-                # 공통 접두사 길이
-                common = 0
-                for a, b in zip(hint, t):
-                    if a == b:
-                        common += 1
-                    else:
-                        break
-                if common > best_score:
-                    best_score = common
-                    best = t
-            d["territory_hint"] = best if best else sorted(valid_territories)[0]
+        d["motifs"] = [m for m in (d.get("motifs") or []) if isinstance(m, str)][:4]
+        d["visual_language"] = d.get("visual_language") or ""
 
-    # 첫 번째 방향의 concept을 selected_concept으로 설정
-    # (디렉터가 HITL에서 다른 방향을 선택할 수 있도록 concepts 목록도 보존)
-    selected = directions[0].get("press_concept", "press_imprint") if directions else "press_imprint"
+    # 첫 번째 방향을 기본 선택으로 둔다. 디렉터는 HITL에서 concepts 목록을 보고
+    # 다른 방향을 골라 편집 도구로 넘길 수 있다.
+    selected = directions[0].get("title", "기본 방향") if directions else "기본 방향"
 
     return {
         "concepts": directions,
         "selected_concept": selected,
         "status": "concepted",
     }
-
 
 
 def research_node(state: PackageDeliveryState) -> Dict[str, Any]:
@@ -284,6 +244,7 @@ def research_node(state: PackageDeliveryState) -> Dict[str, Any]:
     try:
         from graphs.source_verification_graph import build_source_verification_graph
         from langgraph.checkpoint.memory import MemorySaver
+
         sv_graph = build_source_verification_graph(checkpointer=MemorySaver())
         sv_result = sv_graph.invoke(
             {"status": "init"},
@@ -301,6 +262,7 @@ def research_node(state: PackageDeliveryState) -> Dict[str, Any]:
     try:
         from graphs.knowledge_harvester_graph import build_knowledge_harvester_graph
         from langgraph.checkpoint.memory import MemorySaver
+
         kh_graph = build_knowledge_harvester_graph(checkpointer=MemorySaver())
         kh_result = kh_graph.invoke(
             {"query": brief, "category": "design"},
@@ -313,84 +275,37 @@ def research_node(state: PackageDeliveryState) -> Dict[str, Any]:
         kh_summary = f"knowledge_harvester 실패: {str(e)[:100]}"
 
     # 3. LLM으로 레퍼런스 분석
-    llm = chat_model("LOGO_RESEARCH_LLM_MODEL", default_model="gemini-3-flash", temperature=0.3)
-    prompt = ChatPromptTemplate.from_messages([
-        ("system",
-         "당신은 로고 디자인 연구원입니다. 수집된 레퍼런스를 분석하여 다음을 답하세요:\n"
-         "1. 이 브리프와 관련된 시각적 형태 가족은 무엇인가? (monogram, negative_space, mascot, seal_frame, type_block 등)\n"
-         "2. 경쟁사/레퍼런스에서 공통으로 보이는 형태 원리는 무엇인가?\n"
-         "3. 이 브리프에 추천하는 press concept은 무엇인가? (seed_dispersal, press_imprint, ink_overlap, monogram, negative_space, mascot 중 하나)\n"
-         "간결하게 3~5문장으로 답하세요."),
-        ("user",
-         "브리프: {brief}\n"
-         "검색 결과: {sv_summary}\n"
-         "아카이브 결과: {kh_summary}"),
-    ])
+    llm = chat_model(
+        "LOGO_RESEARCH_LLM_MODEL", default_model="gemini-3-flash", temperature=0.3
+    )
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "당신은 로고 디자인 연구원입니다. 수집된 레퍼런스를 분석하여 다음을 답하세요:\n"
+                "1. 이 브리프와 관련된 시각적 형태 가족은 무엇인가? (monogram, negative_space, mascot, seal_frame, type_block 등)\n"
+                "2. 경쟁사/레퍼런스에서 공통으로 보이는 형태 원리는 무엇인가?\n"
+                "3. 이 브리프에 가장 어울리는 시각 방향을 한 줄로 요약하면 무엇인가?\n"
+                "간결하게 3~5문장으로 답하세요.",
+            ),
+            (
+                "user",
+                "브리프: {brief}\n검색 결과: {sv_summary}\n아카이브 결과: {kh_summary}",
+            ),
+        ]
+    )
 
     try:
-        resp = (prompt | llm).invoke({"brief": brief, "sv_summary": sv_summary, "kh_summary": kh_summary})
+        resp = (prompt | llm).invoke(
+            {"brief": brief, "sv_summary": sv_summary, "kh_summary": kh_summary}
+        )
         analysis = resp.content
     except Exception as e:
         analysis = f"분석 실패: {str(e)[:100]}"
 
-    # 추천 concept 추출 (간단한 키워드 매칭)
-    recommended_concept = None
-    for c in ["monogram", "negative_space", "mascot", "seed_dispersal", "press_imprint", "ink_overlap"]:
-        if c in analysis.lower() or c in brief.lower():
-            recommended_concept = c
-            break
-
     return {
         "research_summary": analysis,
-        "recommended_concept": recommended_concept,
         "status": "researched",
-    }
-
-
-
-def press_mark_node(state: PackageDeliveryState) -> Dict[str, Any]:
-    """press로 마크 후보를 생성하고, top 1을 '잠금'한다."""
-    if state.get("mark_source", "none") != "generate":
-        return {"status": "mark_skipped"}
-
-    brief_text = state.get("brief", "Sonagi")
-    concept = state.get("selected_concept") or state.get("concept") or state.get("recommended_concept") or "press_imprint"
-    out_dir = OUT_ROOT / f"press_{uuid.uuid4().hex[:6]}"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    import yaml
-    palette = ["#161616", "#D97706", "#FBF9F5"]
-    # text_spec: 워드마크에 쓸 텍스트 (브리프에서 추출하거나 brand_name 사용)
-    text_spec = [brief_text] if brief_text else ["Sonagi"]
-    brief_doc = {
-        "brand_name": brief_text,
-        "palette": palette,
-        "concept": concept,
-        "text_spec": text_spec,
-        "media_scope": ["web", "print", "favicon"],
-    }
-    brief_path = out_dir / "brief.yaml"
-    brief_path.write_text(
-        yaml.safe_dump(brief_doc, allow_unicode=True, sort_keys=False), encoding="utf-8"
-    )
-
-    cmd = [str(PRESS_GRAPH), "run", str(brief_path), "--out", str(out_dir), "--candidates", "12", "--concept", concept]
-    _run_subprocess(cmd, cwd=PRESS_DIR)
-
-    run_doc = json.loads((out_dir / "run.json").read_text(encoding="utf-8"))
-    selected = run_doc.get("selected", [])
-    if not selected:
-        raise RuntimeError("press: 선택된 마크가 없습니다")
-
-    mark_id = selected[0]["id"]
-    mark_svg = (out_dir / "candidates" / mark_id / "mark.svg").read_text(encoding="utf-8")
-
-    return {
-        "press_run_dir": str(out_dir),
-        "press_selected": selected,
-        "mark_svg": mark_svg,
-        "mark_path": str(out_dir / "candidates" / mark_id / "mark.svg"),
-        "status": "mark_locked",
     }
 
 
@@ -448,10 +363,15 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
     """
     mark_svg = state.get("mark_svg")
     if not mark_svg:
-        return {"context_test_report": {"score": 100, "note": "마크 없음 — 건너뜀"}, "context_test_score": 100, "status": "context_skipped"}
+        return {
+            "context_test_report": {"score": 100, "note": "마크 없음 — 건너뜀"},
+            "context_test_score": 100,
+            "status": "context_skipped",
+        }
 
     import re as _re
     import tempfile
+
     tmp = Path(tempfile.mkdtemp(prefix="ctx-test-"))
     svg_path = tmp / "mark.svg"
     svg_path.write_text(mark_svg, encoding="utf-8")
@@ -466,12 +386,22 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
         out = tmp / f"mark_{size}.png"
         try:
             env = dict(os.environ)
-            shim = _ensure_inkscape_shim()
+            shim = _ensure_converter_shim()
             if shim:
                 env["PATH"] = shim + os.pathsep + env.get("PATH", "")
             subprocess.run(
-                ["vectorcraft-cli", "convert", str(svg_path), str(out), "--scale", str(round(size / 120, 4))],
-                capture_output=True, text=True, timeout=30, env=env,
+                [
+                    "vectorcraft-cli",
+                    "convert",
+                    str(svg_path),
+                    str(out),
+                    "--scale",
+                    str(round(size / 120, 4)),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=env,
             )
             if out.exists() and out.stat().st_size > 100:
                 report["sizes"][size] = "ok"
@@ -487,9 +417,13 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
 
     # --- 2. SVG 구조 검증 ---
     try:
-        element_count = len(_re.findall(r"<(circle|rect|path|polygon|ellipse|line|g)\b", mark_svg))
+        element_count = len(
+            _re.findall(r"<(circle|rect|path|polygon|ellipse|line|g)\b", mark_svg)
+        )
         if element_count > 20:
-            report["issues"].append(f"SVG 요소 {element_count}개 — 너무 복잡 (16px에서 뭉개짐)")
+            report["issues"].append(
+                f"SVG 요소 {element_count}개 — 너무 복잡 (16px에서 뭉개짐)"
+            )
             penalties += 15
         if element_count < 2:
             report["issues"].append("SVG 요소가 너무 적음 — 형태가 없음")
@@ -502,7 +436,9 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
             if len(parts) == 4:
                 w, h = float(parts[2]), float(parts[3])
                 if abs(w - h) > 0.1:
-                    report["issues"].append(f"viewBox 비정사각 ({w}x{h}) — 스케일링 왜곡 가능")
+                    report["issues"].append(
+                        f"viewBox 비정사각 ({w}x{h}) — 스케일링 왜곡 가능"
+                    )
                     penalties += 5
                 if w < 50 or h < 50:
                     report["issues"].append(f"viewBox 너무 작음 ({w}x{h})")
@@ -512,14 +448,21 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
             penalties += 10
 
         # stroke 최소값 확인
-        strokes = [float(m.group(1)) for m in _re.finditer(r'stroke-width="([0-9.]+)"', mark_svg)]
+        strokes = [
+            float(m.group(1))
+            for m in _re.finditer(r'stroke-width="([0-9.]+)"', mark_svg)
+        ]
         if strokes:
             min_stroke = min(strokes)
             if min_stroke < 1.5:
-                report["issues"].append(f"stroke-width {min_stroke} < 1.5 — 16px에서 사라짐")
+                report["issues"].append(
+                    f"stroke-width {min_stroke} < 1.5 — 16px에서 사라짐"
+                )
                 penalties += 10
             if len(set(strokes)) > 1:
-                report["issues"].append(f"stroke-width 불일치: {set(strokes)} — 일관성 부족")
+                report["issues"].append(
+                    f"stroke-width 불일치: {set(strokes)} — 일관성 부족"
+                )
                 penalties += 5
 
         # 색상 수 확인 (로고는 1~2색이 이상적)
@@ -552,8 +495,9 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
     # --- 3. 16px 가독성 (shape preservation) ---
     try:
         from PIL import Image
-        img_256 = (tmp / "mark_256.png")
-        img_16 = (tmp / "mark_16.png")
+
+        img_256 = tmp / "mark_256.png"
+        img_16 = tmp / "mark_16.png"
         if img_256.exists() and img_16.exists():
             # 256px에서의 마스크
             big = Image.open(img_256).convert("RGBA")
@@ -565,16 +509,22 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
             small_pixels = [1 if p[3] > 128 else 0 for p in small_up.getdata()]
 
             # IoU 계산
-            intersection = sum(1 for a, b in zip(big_pixels, small_pixels) if a == 1 and b == 1)
+            intersection = sum(
+                1 for a, b in zip(big_pixels, small_pixels) if a == 1 and b == 1
+            )
             union = sum(1 for a, b in zip(big_pixels, small_pixels) if a == 1 or b == 1)
             iou = intersection / union if union > 0 else 0.0
 
             report["checks"]["shape_preservation_iou"] = round(iou, 3)
             if iou < 0.5:
-                report["issues"].append(f"16px 가독성 낮음 (IoU {iou:.2f} < 0.5) — 형태가 16px에서 무너짐")
+                report["issues"].append(
+                    f"16px 가독성 낮음 (IoU {iou:.2f} < 0.5) — 형태가 16px에서 무너짐"
+                )
                 penalties += 25
             elif iou < 0.7:
-                report["issues"].append(f"16px 가독성 보통 (IoU {iou:.2f}) — 세부가 사라짐")
+                report["issues"].append(
+                    f"16px 가독성 보통 (IoU {iou:.2f}) — 세부가 사라짐"
+                )
                 penalties += 10
     except Exception:
         pass
@@ -582,6 +532,7 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
     # --- 4. 다크/라이트 배경 대비 ---
     try:
         from PIL import Image
+
         img_path = tmp / "mark_256.png"
         if img_path.exists():
             img = Image.open(img_path).convert("RGBA")
@@ -591,20 +542,33 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
                 report["issues"].append("256px: 마크가 거의 보이지 않음 (픽셀 부족)")
                 penalties += 30
             else:
-                luminances = [0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2] for p in non_transparent]
+                luminances = [
+                    0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]
+                    for p in non_transparent
+                ]
                 avg_lum = sum(luminances) / len(luminances)
                 # 밝은 마크 (avg_lum > 180): 어두운 배경에서만 보임 → 라이트 배경에서 안 보임
                 if avg_lum > 180:
-                    report["issues"].append(f"마크가 밝음 (avg lum {avg_lum:.0f}) — 라이트 배경에서 안 보일 수 있음")
+                    report["issues"].append(
+                        f"마크가 밝음 (avg lum {avg_lum:.0f}) — 라이트 배경에서 안 보일 수 있음"
+                    )
                     penalties += 10
                 if avg_lum < 70:
-                    report["issues"].append(f"마크가 어두움 (avg lum {avg_lum:.0f}) — 다크 배경에서 안 보일 수 있음")
+                    report["issues"].append(
+                        f"마크가 어두움 (avg lum {avg_lum:.0f}) — 다크 배경에서 안 보일 수 있음"
+                    )
                     penalties += 10
                 # 대비 비율 (마크 vs 흰 배경)
-                contrast_ratio = max(avg_lum, 1) / max(255 - avg_lum, 1) if avg_lum > 127 else max(255 - avg_lum, 1) / max(avg_lum, 1)
+                contrast_ratio = (
+                    max(avg_lum, 1) / max(255 - avg_lum, 1)
+                    if avg_lum > 127
+                    else max(255 - avg_lum, 1) / max(avg_lum, 1)
+                )
                 report["checks"]["contrast_ratio"] = round(contrast_ratio, 2)
                 if contrast_ratio < 3.0:
-                    report["issues"].append(f"대비 부족 (ratio {contrast_ratio:.1f} < 3.0)")
+                    report["issues"].append(
+                        f"대비 부족 (ratio {contrast_ratio:.1f} < 3.0)"
+                    )
                     penalties += 15
     except Exception:
         pass
@@ -612,11 +576,14 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
     # --- 5. 광학 균형 (캔버스 사용률) ---
     try:
         from PIL import Image
+
         img_path = tmp / "mark_256.png"
         if img_path.exists():
             img = Image.open(img_path).convert("RGBA")
             pixels = list(img.getdata())
-            non_transparent = [(i % 256, i // 256) for i, p in enumerate(pixels) if p[3] > 128]
+            non_transparent = [
+                (i % 256, i // 256) for i, p in enumerate(pixels) if p[3] > 128
+            ]
             if non_transparent:
                 xs = [p[0] for p in non_transparent]
                 ys = [p[1] for p in non_transparent]
@@ -627,11 +594,15 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
                 report["checks"]["bbox"] = [min(xs), min(ys), bbox_w, bbox_h]
                 # 마크가 너무 작음 (< 20% 캔버스 사용)
                 if canvas_usage < 0.15:
-                    report["issues"].append(f"마크가 너무 작음 (캔버스 사용 {canvas_usage:.0%} < 15%)")
+                    report["issues"].append(
+                        f"마크가 너무 작음 (캔버스 사용 {canvas_usage:.0%} < 15%)"
+                    )
                     penalties += 15
                 # 마크가 캔버스를 넘침 (> 95%)
                 if canvas_usage > 0.95:
-                    report["issues"].append(f"마크가 캔버스를 넘침 ({canvas_usage:.0%}) — 여백 없음")
+                    report["issues"].append(
+                        f"마크가 캔버스를 넘침 ({canvas_usage:.0%}) — 여백 없음"
+                    )
                     penalties += 10
                 # 광학 중심: bbox 중심 vs 캔버스 중심
                 cx = (min(xs) + max(xs)) / 2
@@ -639,7 +610,9 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
                 offset_x = abs(cx - 128) / 128
                 offset_y = abs(cy - 128) / 128
                 if offset_x > 0.15 or offset_y > 0.15:
-                    report["issues"].append(f"광학 중심 이탈 (x={offset_x:.2f}, y={offset_y:.2f})")
+                    report["issues"].append(
+                        f"광학 중심 이탈 (x={offset_x:.2f}, y={offset_y:.2f})"
+                    )
                     penalties += 10
     except Exception:
         pass
@@ -650,35 +623,55 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
     if not state.get("skip_vision") and (tmp / "mark_16.png").exists():
         try:
             import base64
+
             img_path = tmp / "mark_16.png"
             img_b64 = base64.b64encode(img_path.read_bytes()).decode("ascii")
-            llm = chat_model("LOGO_VISION_LLM_MODEL", default_model="gemini-3-flash", temperature=0.1)
+            llm = chat_model(
+                "LOGO_VISION_LLM_MODEL", default_model="gemini-3-flash", temperature=0.1
+            )
             # 16px과 32px 렌더를 함께 보내 비교 판단
-            img_16_b64 = base64.b64encode((tmp / "mark_16.png").read_bytes()).decode("ascii")
-            img_32_b64 = base64.b64encode((tmp / "mark_32.png").read_bytes()).decode("ascii") if (tmp / "mark_32.png").exists() else img_16_b64
+            img_16_b64 = base64.b64encode((tmp / "mark_16.png").read_bytes()).decode(
+                "ascii"
+            )
+            img_32_b64 = (
+                base64.b64encode((tmp / "mark_32.png").read_bytes()).decode("ascii")
+                if (tmp / "mark_32.png").exists()
+                else img_16_b64
+            )
 
             vision_prompt = [
-                {"role": "user", "content": [
-                    {"type": "text", "text":
-                     "이것은 같은 로고 마크를 16x16px(왼쪽)과 32x32px(오른쪽)으로 렌더링한 것입니다. "
-                     "인간 디자이너의 눈으로 평가하세요.\n\n"
-                     "평가 기준:\n"
-                     "1. READABLE: 16px에서 마크의 전체 형태가 구분되는가? (yes/no)\n"
-                     "   - yes: 형태가 명확히 보임\n"
-                     "   - no: 형태가 뭉개지거나 점으로 보임\n"
-                     "2. DETAIL_LOSS: 16px에서 사라지는 디테일이 있는가? (있으면 설명, 없으면 none)\n"
-                     "3. MONOCHROME: 단색(검정)으로 바꿔도 형태가 유지되는가? (yes/no)\n"
-                     "4. BALANCE: 마크가 캔버스에서 시각적으로 균형 잡혀 있는가? (yes/no)\n"
-                     "5. SUGGEST: 개선 제안 (1문장, 구체적으로)\n\n"
-                     "형식:\n"
-                     "READABLE: yes/no\n"
-                     "DETAIL_LOSS: 설명 또는 none\n"
-                     "MONOCHROME: yes/no\n"
-                     "BALANCE: yes/no\n"
-                     "SUGGEST: 제안"},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_16_b64}"}},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_32_b64}"}},
-                ]},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "이것은 같은 로고 마크를 16x16px(왼쪽)과 32x32px(오른쪽)으로 렌더링한 것입니다. "
+                            "인간 디자이너의 눈으로 평가하세요.\n\n"
+                            "평가 기준:\n"
+                            "1. READABLE: 16px에서 마크의 전체 형태가 구분되는가? (yes/no)\n"
+                            "   - yes: 형태가 명확히 보임\n"
+                            "   - no: 형태가 뭉개지거나 점으로 보임\n"
+                            "2. DETAIL_LOSS: 16px에서 사라지는 디테일이 있는가? (있으면 설명, 없으면 none)\n"
+                            "3. MONOCHROME: 단색(검정)으로 바꿔도 형태가 유지되는가? (yes/no)\n"
+                            "4. BALANCE: 마크가 캔버스에서 시각적으로 균형 잡혀 있는가? (yes/no)\n"
+                            "5. SUGGEST: 개선 제안 (1문장, 구체적으로)\n\n"
+                            "형식:\n"
+                            "READABLE: yes/no\n"
+                            "DETAIL_LOSS: 설명 또는 none\n"
+                            "MONOCHROME: yes/no\n"
+                            "BALANCE: yes/no\n"
+                            "SUGGEST: 제안",
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{img_16_b64}"},
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{img_32_b64}"},
+                        },
+                    ],
+                },
             ]
             resp = llm.invoke(vision_prompt)
             text = resp.content if hasattr(resp, "content") else str(resp)
@@ -691,7 +684,14 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
                 penalties += 20
             # DETAIL_LOSS
             if "detail_loss:" in low:
-                detail = text.lower().split("detail_loss:")[-1].split("monochrome:")[0].strip() if "monochrome:" in low else text.lower().split("detail_loss:")[-1].strip()
+                detail = (
+                    text.lower()
+                    .split("detail_loss:")[-1]
+                    .split("monochrome:")[0]
+                    .strip()
+                    if "monochrome:" in low
+                    else text.lower().split("detail_loss:")[-1].strip()
+                )
                 if detail and detail != "none" and "none" not in detail[:10]:
                     report["issues"].append(f"LLM vision: {detail[:80]}")
                     penalties += 10
@@ -703,14 +703,22 @@ def context_test_node(state: PackageDeliveryState) -> Dict[str, Any]:
                 penalties += 5
             # SUGGEST 추출
             if "suggest:" in low:
-                suggest = text.split("SUGGEST:")[-1].strip() if "SUGGEST:" in text else text.split("suggest:")[-1].strip()
+                suggest = (
+                    text.split("SUGGEST:")[-1].strip()
+                    if "SUGGEST:" in text
+                    else text.split("suggest:")[-1].strip()
+                )
                 if suggest:
                     report["checks"]["vision_suggestion"] = suggest[:200]
         except Exception as e:
             report["checks"]["vision_error"] = str(e)[:100]
 
     report["score"] = max(0, 100 - penalties)
-    return {"context_test_report": report, "context_test_score": report["score"], "status": "context_tested"}
+    return {
+        "context_test_report": report,
+        "context_test_score": report["score"],
+        "status": "context_tested",
+    }
 
 
 def critic_node(state: PackageDeliveryState) -> Dict[str, Any]:
@@ -724,56 +732,70 @@ def critic_node(state: PackageDeliveryState) -> Dict[str, Any]:
 
 def refine_node(state: PackageDeliveryState) -> Dict[str, Any]:
     """context_test 실패 시 brief를 보강한다. LLM이 피드백을 반영한 새 brief를 생성한다."""
-    llm = chat_model("LOGO_REFINE_LLM_MODEL", default_model="gemini-3-flash", temperature=0.3)
+    llm = chat_model(
+        "LOGO_REFINE_LLM_MODEL", default_model="gemini-3-flash", temperature=0.3
+    )
     issues = (state.get("context_test_report") or {}).get("issues", [])
     current_brief = state.get("brief", "")
     iteration = state.get("iteration_count", 0)
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system",
-         "당신은 로고 디자이너입니다. 다음 문제점을 해결하도록 브리프를 보강하세요.\n"
-         "16px 파비콘에서 읽히지 않으면: 형태를 단순화하고, 세부를 제거하고, 스트로크를 두껍게 하세요.\n"
-         "대비가 부족하면: 색상을 더 어둡게/밝게 바꾸거나, 아웃라인을 추가하세요.\n"
-         "원래 브리프에 구체적인 개선 지시를 추가하세요. JSON으로만 응답하세요."),
-        ("user",
-         "원래 브리프: {brief}\n"
-         "문제점: {issues}\n"
-         "반복 횟수: {iteration}\n\n"
-         '{{"brief": "보강된 브리프 (원래 내용 + 개선 지시)", "concept": "press concept 중 하나"}}'),
-    ])
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "당신은 로고 디자이너입니다. 다음 문제점을 해결하도록 브리프를 보강하세요.\n"
+                "16px 파비콘에서 읽히지 않으면: 형태를 단순화하고, 세부를 제거하고, 스트로크를 두껍게 하세요.\n"
+                "대비가 부족하면: 색상을 더 어둡게/밝게 바꾸거나, 아웃라인을 추가하세요.\n"
+                "원래 브리프에 구체적인 개선 지시를 추가하세요. JSON으로만 응답하세요.",
+            ),
+            (
+                "user",
+                "원래 브리프: {brief}\n"
+                "문제점: {issues}\n"
+                "반복 횟수: {iteration}\n\n"
+                '{{"brief": "보강된 브리프 (원래 내용 + 개선 지시)", "direction": "새 시각 방향 한 줄"}}',
+            ),
+        ]
+    )
 
     try:
         import json as _json
+
         chain = prompt | llm
-        resp = chain.invoke({"brief": current_brief, "issues": "; ".join(issues), "iteration": iteration})
+        resp = chain.invoke(
+            {
+                "brief": current_brief,
+                "issues": "; ".join(issues),
+                "iteration": iteration,
+            }
+        )
         parsed = _json.loads(resp.content)
         new_brief = parsed.get("brief", current_brief)
-        new_concept = parsed.get("concept", state.get("concept"))
+        new_direction = parsed.get("direction", state.get("concept"))
     except Exception:
         # LLM 실패 시 규칙 기반 보강
-        issue_text = "; ".join(issues).lower()
         if iteration == 0:
-            # 1회차: 같은 concept에서 단순화
-            new_brief = current_brief + " (형태 단순화, 대비 강화, 16px 가독성 우선, 겹침 최소화)"
-            new_concept = state.get("concept")
+            # 1회차: 같은 방향에서 단순화
+            new_brief = (
+                current_brief
+                + " (형태 단순화, 대비 강화, 16px 가독성 우선, 겹침 최소화)"
+            )
+            new_direction = state.get("concept")
         else:
-            # 2회차: concept을 전환 (16px 가독성이 높은 방향으로)
-            # lettermark → monogram → negative_space → mascot 순으로 단순화
-            concepts = ["lettermark", "monogram", "negative_space", "mascot", "press_imprint", "seed_dispersal", "ink_overlap"]
-            current = state.get("concept") or state.get("selected_concept") or "press_imprint"
-            idx = concepts.index(current) if current in concepts else 0
-            new_concept = concepts[(idx + 1) % len(concepts)]
-            new_brief = current_brief + f" (concept 전환: {current} → {new_concept}, 16px 가독성 우선)"
-
-    # concept이 바뀌면 selected_concept도 바꾼다
-    if new_concept and new_concept != state.get("concept"):
-        # state에 반영 (refine_node의 반환값에 포함)
-        pass
+            # 2회차: 모티프 계열을 바꿔 다른 방향을 시도한다
+            current = (
+                state.get("concept") or state.get("selected_concept") or "기본 방향"
+            )
+            new_direction = (
+                f"{current} 대신 다른 모티프 계열 — 글자 결합 또는 기하 도형 중심, "
+                "16px 가독성 우선"
+            )
+            new_brief = current_brief + f" (방향 전환: {new_direction})"
 
     return {
         "brief": new_brief,
-        "concept": new_concept,
-        "selected_concept": new_concept,
+        "concept": new_direction,
+        "selected_concept": new_direction,
         "iteration_count": iteration + 1,
         "refine_feedback": "; ".join(issues),
         "status": "refined",
@@ -783,7 +805,11 @@ def refine_node(state: PackageDeliveryState) -> Dict[str, Any]:
 def print_prep_node(state: PackageDeliveryState) -> Dict[str, Any]:
     spec = state.get("print_spec")
     if not spec:
-        return {"print_ok": True, "print_report": "인쇄 사양 없음 — 건너뜀", "status": "print_skipped"}
+        return {
+            "print_ok": True,
+            "print_report": "인쇄 사양 없음 — 건너뜀",
+            "status": "print_skipped",
+        }
 
     issues = []
     variants = state.get("craft_variants", [])
@@ -827,8 +853,6 @@ def publish_node(state: PackageDeliveryState) -> Dict[str, Any]:
 
 def route_mark(state: PackageDeliveryState):
     src = state.get("mark_source", "none")
-    if src == "generate":
-        return "press_mark"
     if src == "existing":
         return "load_mark"
     return "craft"
@@ -852,7 +876,6 @@ def build_logo_design_graph(checkpointer=None, interrupt_before=None):
     builder = StateGraph(PackageDeliveryState)
 
     builder.add_node("concept", concept_node)
-    builder.add_node("press_mark", press_mark_node)
     builder.add_node("load_mark", load_mark_node)
     builder.add_node("craft", craft_node)
     builder.add_node("context_test", context_test_node)
@@ -866,22 +889,30 @@ def build_logo_design_graph(checkpointer=None, interrupt_before=None):
     builder.add_edge(START, "research")
     builder.add_node("research", research_node)
     builder.add_edge("research", "concept")
-    builder.add_conditional_edges("concept", route_mark, {
-        "press_mark": "press_mark",
-        "load_mark": "load_mark",
-        "craft": "craft",
-    })
-    builder.add_edge("press_mark", "craft")
+    builder.add_conditional_edges(
+        "concept",
+        route_mark,
+        {
+            "load_mark": "load_mark",
+            "craft": "craft",
+        },
+    )
     builder.add_edge("load_mark", "craft")
     builder.add_edge("craft", "context_test")
     builder.add_edge("context_test", "critic")
-    builder.add_conditional_edges("critic", route_after_context, {
-        "refine": "refine",
-        "print_prep": "print_prep",
-    })
+    builder.add_conditional_edges(
+        "critic",
+        route_after_context,
+        {
+            "refine": "refine",
+            "print_prep": "print_prep",
+        },
+    )
     builder.add_edge("refine", "concept")  # 루프: refine → concept 재실행
     builder.add_edge("print_prep", "hitl")
-    builder.add_conditional_edges("hitl", route_after_hitl, {"publish": "publish", END: END})
+    builder.add_conditional_edges(
+        "hitl", route_after_hitl, {"publish": "publish", END: END}
+    )
     builder.add_edge("publish", END)
 
     if interrupt_before is None:
@@ -890,4 +921,3 @@ def build_logo_design_graph(checkpointer=None, interrupt_before=None):
 
 
 graph = build_logo_design_graph()
-

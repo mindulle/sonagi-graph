@@ -10,8 +10,8 @@ Discord 세션에서 그래프를 실행하려면 `scripts/graph_cli.py`를 쓴�
 | 그래프 | 용도 | 입력 예시 |
 |---|---|---|
 | `error_triage` | Sentry 에러 분석 | `{"messages":[{"role":"user","content":"에러 로그"}]}` |
-| `logo_design` | 로고 생성 (press + LLM + context_test + HITL) | `{"brief":"브랜드명","mark_source":"generate","concept":"monogram"}` |
-| `package_series` | 3건 패키지 납품 | `{"brief":"...","deliverables":[...],"mark_source":"generate"}` |
+| `logo_design` | 로고 패키지 검증 (LLM 방향 + context_test + HITL) | `{"brief":"브랜드명","mark_source":"existing","mark_path":"/path/mark.svg"}` |
+| `package_series` | 3건 패키지 납품 | `{"brief":"...","deliverables":[...],"mark_source":"existing","mark_path":"/path/mark.svg"}` |
 | `copywriting_craft` | 카피 3안 생성 | `{"scene_id":"Act 1","raw_draft":"초안","context":"맥락"}` |
 | `editorial_verification` | 글 4대 검증 | `{"title":"제목","content":"본문"}` |
 | `visual_consistency` | 시각 일관성 검증 | `{"project_name":"프로젝트","vectors":[...],"motions":[...],"imagery":[...]}` |

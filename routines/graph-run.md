@@ -50,7 +50,7 @@ python3 scripts/graph_cli.py status <thread_id>
 | 그래프 | 입력 |
 |---|---|
 | `error_triage` | `{"messages":[{"role":"user","content":"에러 로그"}]}` |
-| `logo_design` | `{"brief":"브랜드명","mark_source":"generate","concept":"monogram","content":"/path/to/brief.md"}` |
+| `logo_design` | `{"brief":"브랜드명","mark_source":"existing","mark_path":"/path/to/mark.svg","concept":"여백을 살린 모노그램","content":"/path/to/brief.md"}` |
 | `copywriting_craft` | `{"scene_id":"Act 1","raw_draft":"초안","context":"맥락"}` |
 | `editorial_verification` | `{"title":"제목","content":"본문","target_stance":"관점"}` |
 | `visual_consistency` | `{"project_name":"프로젝트","vectors":[...],"motions":[...],"imagery":[...]}` |

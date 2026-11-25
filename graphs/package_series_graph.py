@@ -1,6 +1,8 @@
 """Package Series Graph — 3건 납품을 한 번에 돌리는 배치 오케스트레이터.
 
-마크를 1번에 잠그고, 그 마크로 N개의 패키지를 순차 생성한다.
+마크를 1번만 잠그고, 그 마크로 N개의 패키지를 순차 생성한다.
+마크는 편집 도구(VectorCraft·DesignCraft)에서 만든 SVG를 `mark_path`로 넘긴다.
+마크가 없으면 레이아웃만 검증한다(`mark_source="none"`).
 각 패키지는 독립적인 HITL 게이트를 가진다.
 
 사용::
@@ -11,16 +13,16 @@
     config = {"configurable": {"thread_id": "series-1"}}
     graph.invoke({
         "brief": "민들레 스튜디오 패키지 세트",
-        "concept": "monogram",
+        "mark_source": "existing",
+        "mark_path": "/path/to/mark.svg",
         "content": "/path/to/brief.md",
         "deliverables": [
             {"name": "박스", "print_spec": {"bleed_mm": 3, "cmyk": True, "cmyk_profile": "ISO Coated v2"}},
             {"name": "봉투", "print_spec": {"bleed_mm": 3, "cmyk": True, "cmyk_profile": "ISO Coated v2"}},
             {"name": "라벨", "print_spec": {"bleed_mm": 3, "cmyk": True, "cmyk_profile": "ISO Coated v2"}},
         ],
-        "mark_source": "generate",
     }, config)
-    # 마크 생성 → HITL 1 (마크 확정) → 패키지 1 → HITL 2 → 패키지 2 → HITL 3 → 패키지 3 → HITL 4 → 납품
+    # 마크 로드 → 패키지 1 → HITL 1 → 패키지 2 → HITL 2 → 패키지 3 → HITL 3 → 납품
 """
 
 import json
@@ -52,26 +54,18 @@ class PackageSeriesState(TypedDict, total=False):
     published: List[str]
 
 
-def press_mark_once(state: PackageSeriesState) -> Dict[str, Any]:
-    """마크를 1번만 생성한다. 이미 있으면 건너뛴다."""
+def lock_mark(state: PackageSeriesState) -> Dict[str, Any]:
+    """마크를 1번만 확정한다. 편집 도구에서 만든 SVG를 그대로 쓴다."""
     if state.get("mark_svg"):
         return {"status": "mark_already_locked"}
-    if state.get("mark_source", "generate") != "generate":
+    if state.get("mark_source", "none") != "existing":
         return {"status": "mark_skipped"}
 
-    from graphs.logo_design_graph import press_mark_node
-
-    result = press_mark_node(
-        {
-            "brief": state.get("brief", ""),
-            "mark_source": "generate",
-            "concept": state.get("concept"),
-            "content": state.get("content"),
-        }
-    )
+    path = state.get("mark_path")
+    if not path or not Path(path).exists():
+        raise ValueError(f"mark_path가 유효하지 않습니다: {path}")
     return {
-        "mark_svg": result.get("mark_svg"),
-        "mark_path": result.get("mark_path"),
+        "mark_svg": Path(path).read_text(encoding="utf-8"),
         "status": "mark_locked",
     }
 
@@ -165,13 +159,13 @@ def publish_all_node(state: PackageSeriesState) -> Dict[str, Any]:
 def build_package_series_graph(checkpointer=None):
     builder = StateGraph(PackageSeriesState)
 
-    builder.add_node("press_mark_once", press_mark_once)
+    builder.add_node("lock_mark", lock_mark)
     builder.add_node("deliver_one", deliver_one)
     builder.add_node("series_hitl", series_hitl_node)
     builder.add_node("publish_all", publish_all_node)
 
-    builder.add_edge(START, "press_mark_once")
-    builder.add_edge("press_mark_once", "deliver_one")
+    builder.add_edge(START, "lock_mark")
+    builder.add_edge("lock_mark", "deliver_one")
     builder.add_edge("deliver_one", "series_hitl")
     builder.add_conditional_edges(
         "series_hitl",
