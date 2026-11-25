@@ -7,6 +7,63 @@ on:
     branches: ["master"]
 
 jobs:
+  guardrails:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 표준 라이브러리만 사용한다(설치 단계 없음). graphs/core/exec.py 밖에서
+      # subprocess/os.system/asyncio subprocess를 직접 호출하면 실패한다. (GRAPH-15)
+      - name: graphs/ 직접 실행 lint
+        run: python3 scripts/check_graph_rules.py
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: sonagi-assets (브랜드 SSOT)
+        uses: actions/checkout@v4
+        with:
+          repository: mindulle/sonagi-assets
+          path: sonagi-assets
+
+      - name: MDS 토큰 정본
+        uses: actions/checkout@v4
+        with:
+          repository: mindulle/mindulle-design-system
+          path: mindulle-design-system
+          sparse-checkout: packages/tokens
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test deps
+        run: python3 -m pip install --quiet pytest -e .
+
+      # 제외 항목 (GRAPH-15 스코프는 툴링·문서뿐이라 테스트는 건드리지 않는다):
+      #   test_proxy_limit.py  — 실 프록시 부하 측정용 스크립트. pytest fixture가 없어 collection 단계에서 실패.
+      #   test_design_ops ...  — 외부 VectorCraft CLI와 asset_hub 절대경로에 의존. W2 core 이관에서 해소.
+      #   sonagi-assets/ mindulle-design-system/ — 워크스페이스에 체크아웃한 다른 저장소.
+      #     pytest가 하위 디렉터리를 재귀 수집해 남의 테스트(렌더 바이너리 의존)까지 돌리므로 제외한다.
+      - name: 전체 테스트
+        env:
+          SONAGI_ASSETS_DIR: ${{ github.workspace }}/sonagi-assets
+          MDS_TOKENS_DIR: ${{ github.workspace }}/mindulle-design-system/packages/tokens
+        run: |
+          python3 -m pytest -q \
+            --ignore=test_proxy_limit.py \
+            --ignore=sonagi-assets \
+            --ignore=mindulle-design-system \
+            --deselect test_design_ops.py::test_full_design_ops_pipeline
+
   brand-tokens:
     runs-on: ubuntu-latest
     steps:
