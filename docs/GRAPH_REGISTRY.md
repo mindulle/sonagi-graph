@@ -137,3 +137,55 @@
 - 만료일이 지난 스크립트는 삭제하거나 그래프의 `verify()`/`core`로 흡수한다. 리뷰에서 만료일을 확인한다.
 - 반복해서 쓰게 된 스크립트는 스크립트로 남기지 않고 그래프 노드나 `core/`로 승격한다 — §2의 흡수 대상이 그 결과다.
 
+---
+
+## 8. profile 프레임워크 (P4a, GRAPH-17)
+
+`entry_pack`은 공통 파이프라인(브리프→IR→방향→변주→렌더→린트→게이트→선택)만
+소유하고, 납품 형식은 `graphs/profiles/`가 맡는다.
+
+| 파일 | 책임 |
+| --- | --- |
+| `profiles/base.py` | `Profile` Protocol·`ProfileContext`·`register`/`get_profile`·공통 manifest |
+| `profiles/web.py` | 기존 entry_pack 동작(SVG/PNG/JPG·카드/포스터 목업) — 공개 동작 불변 |
+| `profiles/print.py` | 라벨·파우치 전개도 → 인쇄 PDF 게이트 → 전면 PNG/JPG·meta·목업 |
+
+### 8.1 인터페이스
+
+```python
+class Profile(Protocol):
+    id: str
+    def defaults(self) -> dict: ...
+    def plan(self, ir, spec, styles) -> list[dict]: ...
+    def render(self, variant, ctx: ProfileContext) -> dict | None: ...
+    def gates(self) -> list[Gate]: ...
+    def pack(self, items, spec, state) -> dict: ...
+    def mockups(self, items, spec) -> list[dict]: ...
+```
+
+해석 순서: `spec["profile"]` → `spec["contest_type"]` → `"web"`. 모르는 이름은
+사용 가능 목록과 함께 `ProfileError`로 멈춘다. 새 형식은 파일 하나 + `register()`다.
+
+### 8.2 print
+
+`spec["package"]`가 계약이다(`type`·`brand`·`product`·`size_mm[2]` 필수, `colors`·
+`barcode`·`mark_path` 선택). 게이트는 실패 시 납품을 중단한다(fail closed).
+
+| 게이트 | 검사 |
+| --- | --- |
+| `print.export_check` | `export_print.py --check` — 재단/도련 3mm·안전여백·레이어 |
+| `print.pdf` | 출력 PDF 존재 + 0바이트 초과 |
+| `print.fonts` | `pdffonts`에 `emb=no` 없음 |
+| `print.inkcov` | `gs -sDEVICE=inkcov`가 CMYK를 보고 |
+
+테스트에서만 `spec["allow_print_checks"] = true`로 건너뛴다(게이트는 `skipped`로 기록,
+manifest 상태는 `warn`). 문자열 `"false"` 같은 값은 우회로 인정하지 않는다.
+
+- print 기본값은 `skip_knowledge`·`skip_llm`을 켠다 — 인쇄물은 방향/레퍼런스가 산출물에
+  쓰이지 않으므로 네트워크·LLM 없이 결정론으로 돈다.
+- `mark_path`는 파우치 템플릿에 직접, 라벨은 `render_label.py`가 모르므로 art 그룹에
+  주입하고 manifest 해시를 갱신한다.
+- `export_print.py`는 Chromium을 쓴다. snap Chromium은 `/tmp`(PrivateTmp)를 읽지 못하므로
+  실행 루트(`SONAGI_OUT_ROOT`)가 Chromium에서 접근 가능한 경로여야 한다.
+
+
