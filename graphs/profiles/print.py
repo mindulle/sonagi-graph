@@ -4,13 +4,24 @@
 `scripts/render_label.py`를 그대로 쓰고, 파우치는 같은 레이어 규약
 (`dieline`·`fold`·`art`·`barcode`)의 최소 전면 템플릿을 직접 만든다.
 
-게이트는 **실패 시 멈춘다**(fail closed). 통과하지 못한 PDF는 팩에 들어가지 않는다.
-테스트에서만 `spec["allow_print_checks"] = True`로 건너뛸 수 있다.
+두 단계가 있다(`spec["print_ready"]`, 기본 `False`).
+
+- **entry (False)** — 콘테스트 제출용 표현물. SVG 렌더 → PNG(vectorcraft
+  convert) → JPG(Pillow, 흰 배경) → 목업 → meta/entry.md. 게이트는 순수
+  파이썬·SVG 구조 검사만 한다. `gs`·`chromium`·`pdffonts`·`export_print.py`를
+  **한 번도 호출하지 않는다**(langgraph 컨테이너에 vectorcraft-cli만 있는 환경).
+- **handoff (True)** — 인쇄소 넘김용. PDF/X 변환(`export_print.py`), 잉크량
+  (`gs -sDEVICE=inkcov`), 폰트 임베드(`pdffonts`) 검사까지 한다.
+
+게이트는 **실패 시 멈춘다**(fail closed). 어떤 게이트든 실패하면 meta·entry.md를
+포함한 팩 산출물이 만들어지지 않는다. 테스트에서만
+`spec["allow_print_checks"] = True`로 건너뛸 수 있다(실패는 `skipped`로 남는다).
 
 spec 예::
 
     {
       "profile": "print",
+      "print_ready": False,          # True면 인쇄소 핸드오프(PDF/X)까지
       "package": {
         "type": "label",
         "brand": "SONAGI",
@@ -26,7 +37,13 @@ spec 예::
       }
     }
 
-게이트:
+entry 게이트:
+- `print.assets`      — SVG·PNG·JPG가 존재하고 0바이트보다 크다
+- `print.layers`      — `<g id="dieline">`·`<g id="fold">` 레이어가 있다
+- `print.barcode`     — 바코드가 있으면 조용영역 rect(`barcode-quiet`)가 있다
+- `print.render_size` — 렌더 PNG가 image_width·max_height 상한 안에 들어온다
+
+handoff 게이트:
 - `print.export_check` — `export_print.py --check` (재단/도련 3mm·안전여백·레이어)
 - `print.pdf`          — 출력 PDF 존재 + 0바이트 초과
 - `print.fonts`        — `pdffonts`에 임베드 안 된 폰트 없음
@@ -40,6 +57,7 @@ import hashlib
 import json
 import re
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from xml.sax.saxutils import escape
@@ -59,6 +77,8 @@ DEFAULT_SPEC: Dict[str, Any] = {
     "jpg_quality": 90,
     "bleed_mm": BLEED_MM,
     "allow_print_checks": False,
+    # False(entry): 콘테스트 제출용 표현물만. True(handoff): 인쇄소 PDF/X까지.
+    "print_ready": False,
     # 인쇄물은 방향/레퍼런스가 산출물에 쓰이지 않는다 — 네트워크·LLM 없이 결정론으로 돈다.
     "skip_knowledge": True,
     "skip_llm": True,
@@ -71,7 +91,21 @@ DEFAULT_COLORS = {
     "calm": "#1f4536",
 }
 
-GATES: Tuple[base.Gate, ...] = (
+#: 전개도 레이어 계약 — 형식별로 반드시 있어야 하는 그룹 id.
+#: 접힘선이 없는 형식(예: 단면 스티커)은 이 표에 `()`로 두고 사유를 적는다.
+LAYER_CONTRACT: Dict[str, Tuple[str, ...]] = {
+    "label": ("dieline", "fold"),
+    "pouch": ("dieline", "fold"),
+}
+
+ENTRY_GATES: Tuple[base.Gate, ...] = (
+    base.Gate("print.assets", "SVG·PNG·JPG가 존재하고 0바이트보다 크다"),
+    base.Gate("print.layers", "SVG에 dieline·fold 레이어 그룹이 있다"),
+    base.Gate("print.barcode", "바코드가 있으면 조용영역(barcode-quiet) rect가 있다"),
+    base.Gate("print.render_size", "렌더 PNG가 image_width·max_height 상한 안에 있다"),
+)
+
+HANDOFF_GATES: Tuple[base.Gate, ...] = (
     base.Gate(
         "print.export_check",
         "export_print.py --check: 재단/도련 3mm·안전여백·레이어 분리",
@@ -80,6 +114,10 @@ GATES: Tuple[base.Gate, ...] = (
     base.Gate("print.fonts", "pdffonts: 임베드되지 않은 폰트가 없다"),
     base.Gate("print.inkcov", "gs -sDEVICE=inkcov: CMYK 색공간"),
 )
+
+#: 두 단계가 요구할 수 있는 게이트 전체(문서·린트 판정용). 실행되는 게이트는
+#: `pack`이 `spec["print_ready"]`로 고른다.
+GATES: Tuple[base.Gate, ...] = ENTRY_GATES + HANDOFF_GATES
 
 
 class PrintGateError(RuntimeError):
@@ -515,12 +553,197 @@ def run_gates(
     bleed: float,
     allow: bool = False,
 ) -> List[Dict[str, Any]]:
-    """게이트 4종. 실패가 있으면 `PrintGateError`(allow면 skipped로 남긴다)."""
+    """핸드오프 게이트 4종. 실패가 있으면 `PrintGateError`(allow면 skipped)."""
     results = [
         _gate_export_check(ctx, svg, size_mm, bleed),
         _gate_pdf(pdf),
         _gate_fonts(ctx, pdf),
         _gate_inkcov(ctx, pdf),
+    ]
+    failures = [item for item in results if not item["ok"]]
+    if allow:
+        for item in failures:
+            item["skipped"] = True
+    elif failures:
+        raise PrintGateError(failures)
+    return results
+
+
+# ---------------------------------------------------------------------------
+# entry 게이트 — 순수 파이썬 / SVG 구조. 외부 프로세스 없음
+# ---------------------------------------------------------------------------
+
+
+def _svg_ids(svg: Path) -> Dict[str, ET.Element]:
+    """SVG에서 id 속성을 가진 요소를 모은다(깨진 XML이면 예외)."""
+    root = ET.fromstring(Path(svg).read_text(encoding="utf-8"))
+    found: Dict[str, ET.Element] = {}
+    for element in root.iter():
+        ident = element.get("id")
+        if ident and ident not in found:
+            found[ident] = element
+    return found
+
+
+def _local_name(tag: Any) -> str:
+    """네임스페이스가 붙은 태그(`{ns}rect`)를 로컬 이름으로 줄인다."""
+    text = str(tag)
+    return text.rsplit("}", 1)[-1]
+
+
+def _tagged_group(ids: Mapping[str, ET.Element], ident: str) -> Optional[ET.Element]:
+    """`id`가 붙은 요소가 실제 `<g>` 그룹일 때만 돌려준다(레이어 계약)."""
+    element = ids.get(ident)
+    if element is not None and _local_name(element.tag) == "g":
+        return element
+    return None
+
+
+def _positive_rect(element: ET.Element) -> bool:
+    try:
+        return (
+            float(element.get("width", "0")) > 0
+            and float(element.get("height", "0")) > 0
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _gate_entry_files(paths: Mapping[str, Path]) -> Dict[str, Any]:
+    """산출물 3종이 실제로 있고 비어 있지 않은지(0바이트는 실패)."""
+    problems: List[str] = []
+    present: List[str] = []
+    for label, path in paths.items():
+        target = Path(path)
+        if not target.is_file():
+            problems.append(f"{label} 없음({target.name})")
+            continue
+        size = target.stat().st_size
+        if size <= 0:
+            problems.append(f"{label} 0바이트({target.name})")
+            continue
+        present.append(f"{label} {size:,}B")
+    if problems:
+        return _fail(
+            "print.assets",
+            "엔트리 산출물이 불완전하다 — " + ", ".join(problems),
+        )
+    return _ok("print.assets", " · ".join(present))
+
+
+def _gate_entry_layers(svg: Path, kind: str) -> Dict[str, Any]:
+    """전개도 레이어 계약(dieline/fold)을 SVG 구조로 확인한다."""
+    required = LAYER_CONTRACT.get(kind)
+    if required is None:
+        return _fail(
+            "print.layers",
+            f"전개도 레이어 계약이 없는 형식이다 — {kind!r}를 LAYER_CONTRACT에 추가하라",
+        )
+    if not required:
+        return _ok(
+            "print.layers", f"{kind}: 이 형식은 필수 레이어가 없다(표에 사유 기록됨)"
+        )
+    try:
+        ids = _svg_ids(svg)
+    except Exception as exc:  # noqa: BLE001 — 깨진 XML은 게이트 실패
+        return _fail(
+            "print.layers", f"SVG를 해석할 수 없다 — 레이어 검사 불가: {_tail(exc)}"
+        )
+    missing = [name for name in required if _tagged_group(ids, name) is None]
+    if missing:
+        tags = ", ".join(f'<g id="{name}">' for name in missing)
+        return _fail(
+            "print.layers",
+            f"전개도 레이어 누락 — {tags} 그룹이 필요하다. "
+            "render_label.py·build_pouch_svg의 레이어 규약을 확인하라",
+        )
+    return _ok("print.layers", f"레이어 확인: {', '.join(required)}")
+
+
+def _gate_entry_barcode(svg: Path, package: Mapping[str, Any]) -> Dict[str, Any]:
+    """바코드가 있으면 그룹 안에 조용영역 rect가 있어야 한다."""
+    digits = str(package.get("barcode") or "").strip()
+    try:
+        ids = _svg_ids(svg)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "print.barcode", f"SVG를 해석할 수 없다 — 바코드 검사 불가: {_tail(exc)}"
+        )
+    group = _tagged_group(ids, "barcode")
+    if group is None:
+        if not digits:
+            return _ok("print.barcode", "바코드 없는 사양 — 조용영역 검사 대상 아님")
+        return _fail(
+            "print.barcode",
+            f'<g id="barcode"> 그룹이 없다 — {digits} 바코드와 조용영역을 넣어라',
+        )
+    quiet = [
+        element
+        for element in group.iter()
+        if _local_name(element.tag) == "rect"
+        and element.get("id") == "barcode-quiet"
+        and _positive_rect(element)
+    ]
+    if not quiet:
+        return _fail(
+            "print.barcode",
+            f'{digits or "기본"} 바코드에 조용영역이 없다 — <g id="barcode"> 안에 '
+            'width·height가 양수인 <rect id="barcode-quiet">를 넣어라',
+        )
+    return _ok("print.barcode", f"{digits or '기본'} 바코드 조용영역 rect 확인")
+
+
+def _gate_entry_render_size(png: Path, width: int, max_height: int) -> Dict[str, Any]:
+    """렌더 PNG가 요청한 상한 안에 들어왔는지(0px도 실패)."""
+    try:
+        from PIL import Image
+
+        with Image.open(png) as image:
+            px_w, px_h = image.size
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "print.render_size",
+            f"렌더 PNG를 읽을 수 없다 — 변환 결과를 확인하라: {_tail(exc)}",
+        )
+    if px_w <= 0 or px_h <= 0:
+        return _fail("print.render_size", f"렌더 PNG 크기가 비었다 — {px_w}×{px_h}px")
+    over: List[str] = []
+    if px_w > int(width) + 1:
+        over.append(f"가로 {px_w}px > 상한 {int(width)}px")
+    if px_h > int(max_height) + 1:
+        over.append(f"세로 {px_h}px > 상한 {int(max_height)}px")
+    if over:
+        return _fail(
+            "print.render_size",
+            "렌더 PNG가 상한을 넘었다 — "
+            + ", ".join(over)
+            + ". image_width·max_height를 올리거나 SVG 캔버스 크기를 확인하라",
+        )
+    return _ok(
+        "print.render_size", f"{px_w}×{px_h}px ≤ 상한 {int(width)}×{int(max_height)}px"
+    )
+
+
+def run_entry_gates(
+    *,
+    svg: Path,
+    png: Path,
+    jpg: Path,
+    package: Mapping[str, Any],
+    width: int,
+    max_height: int,
+    allow: bool = False,
+) -> List[Dict[str, Any]]:
+    """엔트리 게이트 4종. 실패가 있으면 `PrintGateError`(allow면 skipped).
+
+    순수 파이썬·SVG 구조 검사만 한다 — `gs`·`chromium`·`pdffonts`·
+    `export_print.py`를 부르지 않으므로 vectorcraft-cli만 있는 컨테이너에서 돈다.
+    """
+    results = [
+        _gate_entry_files({"svg": Path(svg), "png": Path(png), "jpg": Path(jpg)}),
+        _gate_entry_layers(Path(svg), str(package.get("type") or "label")),
+        _gate_entry_barcode(Path(svg), package),
+        _gate_entry_render_size(Path(png), width, max_height),
     ]
     failures = [item for item in results if not item["ok"]]
     if allow:
@@ -710,6 +933,12 @@ class PrintProfile:
         }
 
     def gates(self) -> List[base.Gate]:
+        """두 단계가 요구할 수 있는 게이트 전체(설명용).
+
+        실행되는 게이트는 `pack`이 `spec["print_ready"]`로 고른다 — entry는
+        앞 4종(순수 파이썬), handoff는 뒤 4종(PDF/X·CMYK·폰트). 이 목록은
+        "이 profile은 자체 게이트를 갖는다"는 판정(critic/gate 노드)에 쓰인다.
+        """
         return list(GATES)
 
     def _export_pdf(
@@ -765,6 +994,8 @@ class PrintProfile:
         bleed = float(spec.get("bleed_mm", BLEED_MM))
         # 테스트 우회는 명시적 bool true만 — 문자열 "false"가 게이트를 끄지 않게 한다.
         allow = spec.get("allow_print_checks") is True
+        # handoff는 명시적 bool true만 — 기본은 엔트리(표현물) 단계다.
+        handoff = spec.get("print_ready") is True
 
         packed: List[Dict[str, Any]] = []
         gates: List[Dict[str, Any]] = []
@@ -772,60 +1003,79 @@ class PrintProfile:
             variant_id = item["id"]
             svg = Path(item["svg"])
             size_mm = item.get("size_mm") or package["size_mm"]
-            print_dir = pack_dir / f"{variant_id}-print"
-            try:
-                pdf = self._export_pdf(ctx, svg, size_mm, bleed, print_dir)
-            except Exception as exc:  # noqa: BLE001
-                failure = _fail(
-                    "print.export",
-                    "export_print 실행 실패 — chromium·ghostscript 설치, SVG 비율, "
-                    f"출력 경로 접근성(snap chromium은 /tmp PrivateTmp를 못 읽는다)을 확인하라: "
-                    f"{_tail(exc)}",
-                )
-                if not allow:
-                    raise PrintGateError([failure]) from exc
-                failure["skipped"] = True
-                gates.append(failure)
-                pdf = print_dir / f"{Path(svg).stem}.pdf"
+            pdf: Optional[Path] = None
+            item_gates: List[Dict[str, Any]] = []
+            if handoff:
+                # 인쇄소 핸드오프: PDF/X 변환 + 도련·폰트·잉크 게이트.
+                print_dir = pack_dir / f"{variant_id}-print"
+                try:
+                    pdf = self._export_pdf(ctx, svg, size_mm, bleed, print_dir)
+                except Exception as exc:  # noqa: BLE001
+                    failure = _fail(
+                        "print.export",
+                        "export_print 실행 실패 — chromium·ghostscript 설치, SVG 비율, "
+                        f"출력 경로 접근성(snap chromium은 /tmp PrivateTmp를 못 읽는다)을 확인하라: "
+                        f"{_tail(exc)}",
+                    )
+                    if not allow:
+                        raise PrintGateError([failure]) from exc
+                    failure["skipped"] = True
+                    gates.append(failure)
+                    pdf = print_dir / f"{Path(svg).stem}.pdf"
 
-            item_gates = run_gates(
-                ctx, svg=svg, pdf=pdf, size_mm=size_mm, bleed=bleed, allow=allow
-            )
-            gates.extend(item_gates)
+                item_gates = run_gates(
+                    ctx, svg=svg, pdf=pdf, size_mm=size_mm, bleed=bleed, allow=allow
+                )
 
             png = pack_dir / f"{variant_id}-front.png"
             jpg = pack_dir / f"{variant_id}.jpg"
             ctx.convert(svg, png, width, max_height)
             ctx.jpeg(png, jpg, quality)
 
-            packed.append(
-                {
-                    "id": variant_id,
-                    "kind": item.get("kind", package["type"]),
-                    "brand": package["brand"],
-                    "product": package["product"],
-                    "size_mm": list(size_mm),
-                    "svg": str(svg),
-                    "spec": item.get("spec"),
-                    "pdf": str(pdf),
-                    "png": str(png),
-                    "jpg": str(jpg),
-                    "png_size": png.stat().st_size,
-                    "jpg_size": jpg.stat().st_size,
-                    "pdf_size": pdf.stat().st_size if pdf.is_file() else 0,
-                    "sha256": core_artifacts.sha256_file(png),
-                    "gates": item_gates,
-                }
-            )
+            if not handoff:
+                # 엔트리: PNG·JPG가 나온 뒤 구조 검사만 한다(외부 프로세스 없음).
+                item_gates = run_entry_gates(
+                    svg=svg,
+                    png=png,
+                    jpg=jpg,
+                    package=package,
+                    width=width,
+                    max_height=max_height,
+                    allow=allow,
+                )
+            gates.extend(item_gates)
+
+            row: Dict[str, Any] = {
+                "id": variant_id,
+                "kind": item.get("kind", package["type"]),
+                "brand": package["brand"],
+                "product": package["product"],
+                "size_mm": list(size_mm),
+                "svg": str(svg),
+                "spec": item.get("spec"),
+                "png": str(png),
+                "jpg": str(jpg),
+                # allow 우회(테스트)에서 파일이 없어도 meta를 쓸 수 있게 0으로 둔다.
+                "png_size": png.stat().st_size if png.is_file() else 0,
+                "jpg_size": jpg.stat().st_size if jpg.is_file() else 0,
+                "sha256": core_artifacts.sha256_file(png) if png.is_file() else None,
+                "gates": item_gates,
+            }
+            if pdf is not None:
+                row["pdf"] = str(pdf)
+                row["pdf_size"] = pdf.stat().st_size if pdf.is_file() else 0
+            packed.append(row)
 
         meta = {
             "profile": "print",
+            "mode": "handoff" if handoff else "entry",
+            "print_ready": handoff,
             "package_type": package["type"],
             "inputs_sha256": core_artifacts.sha256_json(package),
             "brand": package["brand"],
             "product": package["product"],
             "size_mm": package["size_mm"],
-            "bleed_mm": bleed,
+            "bleed_mm": bleed if handoff else None,
             "image_width": width,
             "allow_print_checks": allow,
             "gates_ok": all(item["ok"] for item in gates),
@@ -839,7 +1089,14 @@ class PrintProfile:
         lines = [f"# 인쇄 팩 — {package['brand']} {package['product']}", ""]
         lines += [
             f"- 종류: {package['type']}",
-            f"- 재단: {package['size_mm'][0]}×{package['size_mm'][1]}mm · 도련 {bleed}mm",
+            f"- 재단: {package['size_mm'][0]}×{package['size_mm'][1]}mm"
+            + (f" · 도련 {bleed}mm" if handoff else " (도련 미적용 — 제출용 표현물)"),
+            f"- 단계: {meta['mode']}"
+            + (
+                " (인쇄소 핸드오프: PDF/X·CMYK·폰트 임베드)"
+                if handoff
+                else " (콘테스트 제출: 표현물만)"
+            ),
             f"- 입력 지문: `{meta['inputs_sha256'][:16]}`",
             "",
             "## 게이트",
@@ -852,7 +1109,12 @@ class PrintProfile:
             lines += [
                 f"### {item['id']}",
                 f"- SVG: `{Path(item['svg']).name}`",
-                f"- PDF: `{Path(item['pdf']).name}` ({item['pdf_size']:,}B)",
+            ]
+            if item.get("pdf"):
+                lines.append(
+                    f"- PDF: `{Path(item['pdf']).name}` ({item['pdf_size']:,}B)"
+                )
+            lines += [
                 f"- PNG: `{Path(item['png']).name}` ({item['png_size']:,}B)",
                 f"- JPG: `{Path(item['jpg']).name}` ({item['jpg_size']:,}B)",
                 "",
@@ -861,7 +1123,9 @@ class PrintProfile:
 
         artifact_paths: List[Any] = []
         for item in packed:
-            artifact_paths += [item["svg"], item["pdf"], item["png"], item["jpg"]]
+            artifact_paths += [item["svg"], item["png"], item["jpg"]]
+            if item.get("pdf"):
+                artifact_paths.append(item["pdf"])
             if item.get("spec"):
                 artifact_paths.append(item["spec"])
         artifact_paths += [pack_dir / "meta.json", pack_dir / "entry.md"]

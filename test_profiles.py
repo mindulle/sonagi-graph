@@ -1,7 +1,13 @@
-"""profiles 프레임워크(v1) — 레지스트리·web 위임·print 게이트/팩 (GRAPH-17).
+"""profiles 프레임워크(v1) — 레지스트리·web 위임·print 게이트/팩 (GRAPH-17·20).
 
 전부 오프라인이다. 외부 프로세스는 `core.exec` 훅 monkeypatch로만 흉내 낸다.
 gs·chromium·네트워크·폰트 설치를 요구하지 않는다.
+
+print는 두 단계를 시험한다.
+
+- entry(`print_ready=False`): vectorcraft 변환 외 외부 호출 0회. 게이트는
+  순수 파이썬·SVG 구조 검사.
+- handoff(`print_ready=True`): export_print·pdffonts·gs까지 흉내 내는 기존 경로.
 """
 
 import json
@@ -44,8 +50,10 @@ def _package(**overrides):
 
 
 def _print_spec(**overrides):
+    # 핸드오프(인쇄소 PDF/X) 단계 — 기존 동작 그대로.
     spec = {
         "profile": "print",
+        "print_ready": True,
         "package": _package(),
         "image_width": 400,
         "max_height": 600,
@@ -53,6 +61,132 @@ def _print_spec(**overrides):
     }
     spec.update(overrides)
     return spec
+
+
+def _entry_spec(**overrides):
+    """엔트리(콘테스트 제출) 단계 — print_ready 기본값 False."""
+    return _print_spec(print_ready=False, **overrides)
+
+
+#: 엔트리 단계에서 절대 실행되면 안 되는 프로그램·스크립트.
+FORBIDDEN_ENTRY_PROGRAMS = {
+    "gs",
+    "ghostscript",
+    "chromium",
+    "chromium-browser",
+    "chrome",
+    "google-chrome",
+    "pdffonts",
+    "export_print.py",
+}
+
+
+def _record_exec(
+    monkeypatch, calls, *, png_size=None, label_svg=None, real_python=False
+):
+    """`core.exec.run`을 기록기로 바꾼다. vectorcraft convert만 실제 PNG를 쓴다.
+
+    엔트리 단계가 어떤 외부 프로세스도 부르지 않는지 argv 전체로 검증하기 위한
+    장치다. `png_size`를 주면 변환 결과 크기를 강제로 고정한다(상한 초과 시험).
+    `label_svg`를 주면 render_label.py 호출을 그 SVG로 흉내 낸다.
+    `real_python=True`면 python 스크립트는 실제 core.exec로 실행한다.
+    """
+    from graphs.core import exec as core_exec
+
+    real_run = core_exec.run
+
+    def result(argv, stdout=""):
+        return core_exec.RunResult(
+            argv=tuple(argv),
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+            duration_ms=0,
+        )
+
+    def fake_exec(args, timeout=300, **kwargs):
+        argv = [str(arg) for arg in args]
+        calls.append(argv)
+        program = Path(argv[0]).name
+        script = Path(argv[1]).name if len(argv) > 1 else ""
+        if program.startswith("vectorcraft") and len(argv) > 3:
+            from PIL import Image
+
+            svg, out = Path(argv[2]), Path(argv[3])
+            if png_size is None:
+                scale = float(argv[argv.index("--scale") + 1])
+                native_w, native_h = base.svg_size(svg)
+                size = (
+                    max(1, round(native_w * scale)),
+                    max(1, round(native_h * scale)),
+                )
+            else:
+                size = png_size
+            Image.new("RGB", size, (250, 249, 245)).save(out, "PNG")
+            return result(argv)
+        if script == "render_label.py":
+            if real_python:
+                return real_run([str(arg) for arg in args], timeout=timeout, **kwargs)
+            if label_svg is not None:
+                out = Path(argv[argv.index("--out") + 1])
+                name = argv[argv.index("--name") + 1]
+                out.mkdir(parents=True, exist_ok=True)
+                (out / f"{name}.svg").write_text(label_svg, encoding="utf-8")
+                (out / f"{name}.manifest.json").write_text("{}", encoding="utf-8")
+            return result(argv)
+        return result(argv)
+
+    monkeypatch.setattr(core_exec, "run", fake_exec)
+    return calls
+
+
+def _assert_only_vectorcraft(calls, *, allow_python=False):
+    """호출된 프로그램이 vectorcraft(와 허용된 python 스크립트)뿐인지 확인한다."""
+    allowed = {"vectorcraft-cli"} | ({"python3", "python"} if allow_python else set())
+    names = {Path(argv[0]).name for argv in calls}
+    assert names <= allowed, f"예상 밖 프로세스: {sorted(names - allowed)}"
+    if not allow_python:
+        assert names == {"vectorcraft-cli"}, f"예상 밖 프로세스: {sorted(names)}"
+    for argv in calls:
+        flat = {Path(str(arg)).name for arg in argv}
+        forbidden = flat & FORBIDDEN_ENTRY_PROGRAMS
+        assert not forbidden, f"엔트리 단계가 인쇄 도구를 호출했다: {argv}"
+
+
+def _minimal_entry_svg(*, fold=True, barcode_block="", dieline_tag="g"):
+    parts = ['<svg xmlns="http://www.w3.org/2000/svg" width="340" height="227">']
+    if dieline_tag == "g":
+        parts.append('<g id="dieline"><rect x="0" y="0" width="340" height="227"/></g>')
+    else:
+        parts.append('<rect id="dieline" x="0" y="0" width="340" height="227"/>')
+    if fold:
+        parts.append('<g id="fold"><line x1="10" y1="0" x2="10" y2="227"/></g>')
+    parts.append(barcode_block)
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+_VALID_BARCODE = (
+    '<g id="barcode">'
+    '<rect id="barcode-quiet" x="1" y="1" width="10" height="10"/>'
+    '<g id="barcode-bars"><rect x="3" y="3" width="1" height="6"/></g>'
+    "</g>"
+)
+
+
+def _pouch_svg_text(**package_overrides):
+    package = print_profile.package_spec(
+        {"package": _package(type="pouch", **package_overrides)}
+    )
+    return print_profile.build_pouch_svg(package)[0]
+
+
+def _write_png(path, size=(400, 267)):
+    from PIL import Image
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", size, (250, 249, 245)).save(path, "PNG")
+    return path
 
 
 def _pdffonts(*rows, name_width=36):
@@ -174,6 +308,7 @@ def test_print_defaults_are_merged_by_spec_node():
         }
     )
     assert result["spec"]["allow_print_checks"] is False
+    assert result["spec"]["print_ready"] is False
     assert result["spec"]["bleed_mm"] == 3.0
     # web 기본값이 print spec에 새지 않는다.
     assert "platform" not in result["spec"]
@@ -618,14 +753,31 @@ def test_allow_print_checks_marks_failures_skipped(tmp_path):
 
 
 def test_print_gate_descriptors():
+    """profile.gates()는 두 단계가 요구할 수 있는 게이트 전체를 문서화한다."""
     gates = base.get_profile("print").gates()
     assert [gate.id for gate in gates] == [
+        "print.assets",
+        "print.layers",
+        "print.barcode",
+        "print.render_size",
         "print.export_check",
         "print.pdf",
         "print.fonts",
         "print.inkcov",
     ]
     assert all(gate.required for gate in gates)
+    assert [gate.id for gate in print_profile.ENTRY_GATES] == [
+        "print.assets",
+        "print.layers",
+        "print.barcode",
+        "print.render_size",
+    ]
+    assert [gate.id for gate in print_profile.HANDOFF_GATES] == [
+        "print.export_check",
+        "print.pdf",
+        "print.fonts",
+        "print.inkcov",
+    ]
 
 
 def test_unembedded_fonts_parser_handles_wide_names():
@@ -676,6 +828,8 @@ def test_print_pack_writes_front_png_jpg_meta_and_entry(tmp_path):
     assert (pack_dir / "entry.md").is_file()
     meta = json.loads((pack_dir / "meta.json").read_text(encoding="utf-8"))
     assert meta["package_type"] == "label"
+    assert meta["mode"] == "handoff"
+    assert meta["print_ready"] is True
     assert meta["allow_print_checks"] is False
     assert meta["gates_ok"] is True
     assert [gate["id"] for gate in meta["gates"]] == [
@@ -827,8 +981,491 @@ def test_entry_pack_routes_print_pack_through_entry_hooks(tmp_path, monkeypatch)
     )
     meta = json.loads(Path(result["entry"]["meta"]).read_text(encoding="utf-8"))
     assert meta["gates_ok"] is True
+    assert meta["mode"] == "handoff"
+    scripts = {Path(argv[1]).name for argv in calls if len(argv) > 1}
     programs = {Path(argv[0]).name for argv in calls}
+    assert "export_print.py" in scripts
     assert "pdffonts" in programs and "gs" in programs
+
+
+# ---------------------------------------------------------------------------
+# Print — entry 단계 (print_ready=False): 외부 인쇄 도구 0회
+# ---------------------------------------------------------------------------
+
+
+def test_print_default_spec_is_entry_stage():
+    assert print_profile.DEFAULT_SPEC["print_ready"] is False
+
+
+def test_layer_contract_covers_every_package_type():
+    """접힘선이 없는 형식은 빈 튜플로 사유를 남긴다(계약 누락은 실패)."""
+    assert set(print_profile.LAYER_CONTRACT) == set(print_profile.PACKAGE_TYPES)
+    for kind, layers in print_profile.LAYER_CONTRACT.items():
+        assert isinstance(layers, tuple), kind
+        assert "dieline" in layers or layers == (), kind
+
+
+def test_entry_pack_calls_only_vectorcraft(tmp_path, monkeypatch):
+    """엔트리 단계는 gs·chromium·pdffonts·export_print를 한 번도 부르지 않는다."""
+    calls = _record_exec(monkeypatch, [])
+    spec = _entry_spec(package=_package(type="pouch"))
+    svg = tmp_path / "pouch.svg"
+    svg.write_text(_pouch_svg_text(), encoding="utf-8")
+    ctx = base.ProfileContext(run_dir=tmp_path / "run")
+    profile = base.get_profile("print")
+    variant = profile.plan({}, spec, [])[0]
+
+    result = profile.pack(
+        [{**variant, "svg": str(svg)}],
+        spec,
+        {"profile_ctx": ctx, "spec": spec, "brief": "b"},
+    )
+
+    _assert_only_vectorcraft(calls)
+    meta = json.loads((Path(result["dir"]) / "meta.json").read_text(encoding="utf-8"))
+    assert meta["mode"] == "entry"
+    assert meta["print_ready"] is False
+    assert meta["gates_ok"] is True
+    assert [gate["id"] for gate in meta["gates"]] == [
+        "print.assets",
+        "print.layers",
+        "print.barcode",
+        "print.render_size",
+    ]
+
+    item = result["items"][0]
+    assert "pdf" not in item and "pdf_size" not in item
+    assert Path(item["png"]).stat().st_size > 0
+    assert Path(item["jpg"]).stat().st_size > 0
+    assert not list(Path(result["dir"]).glob("*.pdf"))
+
+    entry_md = (Path(result["dir"]) / "entry.md").read_text(encoding="utf-8")
+    assert "entry" in entry_md
+    assert "PDF" not in entry_md
+    assert "도련 미적용" in entry_md
+    assert "도련 3mm" not in entry_md
+    assert meta["bleed_mm"] is None
+    manifest = json.loads(
+        (tmp_path / "run" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["kind"] == "print" and manifest["status"] == "ok"
+
+
+def test_entry_label_render_then_pack_stays_offline(tmp_path, monkeypatch):
+    """기본 형식(label)의 render→pack 경로도 인쇄 도구를 부르지 않는다."""
+    label_svg = _minimal_entry_svg(barcode_block=_VALID_BARCODE)
+    calls = _record_exec(monkeypatch, [], label_svg=label_svg)
+    spec = _entry_spec()  # type 기본값 = label
+    profile = base.get_profile("print")
+    variant = profile.plan({}, spec, [])[0]
+    ctx = base.ProfileContext(run_dir=tmp_path / "run")
+
+    rendered = profile.render(variant, ctx)
+    result = profile.pack([rendered], spec, {"profile_ctx": ctx, "spec": spec})
+
+    _assert_only_vectorcraft(calls, allow_python=True)
+    python_scripts = {
+        Path(argv[1]).name
+        for argv in calls
+        if Path(argv[0]).name.startswith("python") and len(argv) > 1
+    }
+    assert python_scripts == {"render_label.py"}
+    meta = json.loads((Path(result["dir"]) / "meta.json").read_text(encoding="utf-8"))
+    assert meta["mode"] == "entry" and meta["gates_ok"] is True
+    assert [gate["id"] for gate in meta["gates"]] == [
+        "print.assets",
+        "print.layers",
+        "print.barcode",
+        "print.render_size",
+    ]
+
+
+@pytest.mark.skipif(
+    not (base.ProfileContext().assets_dir / "scripts/render_label.py").is_file(),
+    reason="sonagi-assets의 render_label.py가 없는 환경",
+)
+def test_entry_label_real_render_label_output_passes_structural_gates(
+    tmp_path, monkeypatch
+):
+    """실제 render_label.py 산출 SVG가 dieline·fold·바코드 조용영역 계약을 지키는지."""
+    calls = _record_exec(monkeypatch, [], real_python=True)
+    spec = _entry_spec()
+    profile = base.get_profile("print")
+    variant = profile.plan({}, spec, [])[0]
+    ctx = base.ProfileContext(run_dir=tmp_path / "run")
+
+    rendered = profile.render(variant, ctx)
+    result = profile.pack([rendered], spec, {"profile_ctx": ctx, "spec": spec})
+
+    _assert_only_vectorcraft(calls, allow_python=True)
+    meta = json.loads((Path(result["dir"]) / "meta.json").read_text(encoding="utf-8"))
+    assert meta["gates_ok"] is True, meta["gates"]
+
+
+def test_entry_pack_through_graph_node_never_touches_print_tools(tmp_path, monkeypatch):
+    """entry_pack 노드 경로 전체에서도 인쇄 도구 호출이 0회다."""
+    calls = _record_exec(monkeypatch, [])
+    spec = _entry_spec(package=_package(type="pouch"))
+    svg = tmp_path / "pouch.svg"
+    svg.write_text(_pouch_svg_text(), encoding="utf-8")
+    monkeypatch.setattr(entry, "OUT_ROOT", tmp_path)
+
+    variant = base.get_profile("print").plan({}, spec, [])[0]
+    result = entry.pack_node(
+        {
+            "run_id": "print-entry",
+            "brief": "인쇄 팩",
+            "spec": spec,
+            "renders": [{**variant, "svg": str(svg)}],
+            "options": [{"id": variant["id"]}],
+            "selection": [variant["id"]],
+        }
+    )
+    _assert_only_vectorcraft(calls)
+    meta = json.loads(Path(result["entry"]["meta"]).read_text(encoding="utf-8"))
+    assert meta["mode"] == "entry" and meta["gates_ok"] is True
+
+
+def test_entry_pack_builds_mockups_after_pack(tmp_path, monkeypatch):
+    calls = _record_exec(monkeypatch, [])
+    spec = _entry_spec(package=_package(type="pouch"))
+    svg = tmp_path / "pouch.svg"
+    svg.write_text(_pouch_svg_text(), encoding="utf-8")
+    monkeypatch.setattr(entry, "OUT_ROOT", tmp_path)
+
+    variant = base.get_profile("print").plan({}, spec, [])[0]
+    state = {
+        "run_id": "print-entry-mock",
+        "brief": "인쇄 팩",
+        "spec": spec,
+        "renders": [{**variant, "svg": str(svg)}],
+        "options": [{"id": variant["id"]}],
+        "selection": [variant["id"]],
+    }
+    packed = entry.pack_node(state)
+    mocked = entry.mockup_node({**state, "entry": packed["entry"]})
+    _assert_only_vectorcraft(calls)
+    assert mocked["status"] == "mocked"
+    assert Path(mocked["mockups"][0]["flat"]).is_file()
+    assert Path(mocked["mockups"][0]["pouch"]).is_file()
+
+
+def test_entry_gate_missing_fold_layer_fails_closed(tmp_path, monkeypatch):
+    _record_exec(monkeypatch, [])
+    text = re.sub(r'<g id="fold".*?</g>', "", _pouch_svg_text(), flags=re.S)
+    svg = tmp_path / "pouch.svg"
+    svg.write_text(text, encoding="utf-8")
+    spec = _entry_spec(package=_package(type="pouch"))
+    ctx = base.ProfileContext(run_dir=tmp_path / "run")
+    profile = base.get_profile("print")
+    variant = profile.plan({}, spec, [])[0]
+
+    with pytest.raises(print_profile.PrintGateError) as exc:
+        profile.pack(
+            [{**variant, "svg": str(svg)}],
+            spec,
+            {"profile_ctx": ctx, "spec": spec},
+        )
+    assert "print.layers" in str(exc.value)
+    assert "fold" in str(exc.value)
+    assert not (tmp_path / "run" / "pack" / "meta.json").exists()
+    assert not (tmp_path / "run" / "pack" / "entry.md").exists()
+
+
+def test_entry_gate_missing_barcode_quiet_zone_fails_closed(tmp_path):
+    text = re.sub(r'<rect id="barcode-quiet"[^>]*/>', "", _pouch_svg_text(), flags=re.S)
+    svg = tmp_path / "pouch.svg"
+    svg.write_text(text, encoding="utf-8")
+    png = _write_png(tmp_path / "front.png")
+    jpg = _write_png(tmp_path / "front.jpg")
+
+    with pytest.raises(print_profile.PrintGateError) as exc:
+        print_profile.run_entry_gates(
+            svg=svg,
+            png=png,
+            jpg=jpg,
+            package={"type": "pouch", "barcode": "8801234567890"},
+            width=400,
+            max_height=600,
+        )
+    assert "print.barcode" in str(exc.value)
+    assert "조용영역" in str(exc.value)
+
+
+def test_entry_barcode_gate_documents_absent_barcode(tmp_path):
+    """바코드가 없는 사양은 조용영역 검사 대상이 아니다(사유를 남긴다)."""
+    svg = tmp_path / "plain.svg"
+    svg.write_text(_minimal_entry_svg(), encoding="utf-8")
+    results = print_profile.run_entry_gates(
+        svg=svg,
+        png=_write_png(tmp_path / "front.png"),
+        jpg=_write_png(tmp_path / "front.jpg"),
+        package={"type": "label", "barcode": ""},
+        width=400,
+        max_height=600,
+    )
+    barcode = next(item for item in results if item["id"] == "print.barcode")
+    assert barcode["ok"] is True
+    assert "대상 아님" in barcode["detail"]
+
+
+@pytest.mark.parametrize(
+    "barcode_block",
+    [
+        # 그룹 자체가 없다 — 바코드 숫자는 있는데 그리지 않았다.
+        "",
+        # 조용영역 rect가 그룹 밖에 있다.
+        '<g id="barcode"><g id="barcode-bars"/></g>'
+        '<rect id="barcode-quiet" x="1" y="1" width="10" height="10"/>',
+        # 조용영역 크기가 0이다.
+        '<g id="barcode">'
+        '<rect id="barcode-quiet" x="1" y="1" width="0" height="10"/>'
+        "</g>",
+        # quiet id가 rect가 아니다.
+        '<g id="barcode"><text id="barcode-quiet" x="1" y="1">q</text></g>',
+    ],
+)
+def test_entry_barcode_gate_rejects_broken_quiet_zones(tmp_path, barcode_block):
+    svg = tmp_path / "barcode.svg"
+    svg.write_text(_minimal_entry_svg(barcode_block=barcode_block), encoding="utf-8")
+    with pytest.raises(print_profile.PrintGateError) as exc:
+        print_profile.run_entry_gates(
+            svg=svg,
+            png=_write_png(tmp_path / "front.png"),
+            jpg=_write_png(tmp_path / "front.jpg"),
+            package={"type": "label", "barcode": "8801234567890"},
+            width=400,
+            max_height=600,
+        )
+    assert "print.barcode" in str(exc.value)
+
+
+def test_entry_layer_gate_requires_groups_not_loose_elements(tmp_path):
+    """`<rect id="dieline">`는 레이어 그룹이 아니다."""
+    svg = tmp_path / "loose.svg"
+    svg.write_text(
+        _minimal_entry_svg(barcode_block=_VALID_BARCODE, dieline_tag="rect"),
+        encoding="utf-8",
+    )
+    with pytest.raises(print_profile.PrintGateError) as exc:
+        print_profile.run_entry_gates(
+            svg=svg,
+            png=_write_png(tmp_path / "front.png"),
+            jpg=_write_png(tmp_path / "front.jpg"),
+            package={"type": "label", "barcode": "8801234567890"},
+            width=400,
+            max_height=600,
+        )
+    assert "print.layers" in str(exc.value)
+    assert 'id="dieline"' in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    ("size", "ok"),
+    [
+        ((400, 600), True),  # 정확히 상한
+        ((401, 600), True),  # 1px 반올림 허용
+        ((402, 600), False),  # 가로 초과
+        ((400, 601), True),
+        ((400, 602), False),  # 세로 초과
+    ],
+)
+def test_entry_render_size_gate_boundaries(tmp_path, size, ok):
+    svg = tmp_path / "plain.svg"
+    svg.write_text(_minimal_entry_svg(barcode_block=_VALID_BARCODE), encoding="utf-8")
+    results = print_profile.run_entry_gates(
+        svg=svg,
+        png=_write_png(tmp_path / "front.png", size=size),
+        jpg=_write_png(tmp_path / "front.jpg"),
+        package={"type": "label", "barcode": "8801234567890"},
+        width=400,
+        max_height=600,
+        allow=not ok,
+    )
+    gate = next(item for item in results if item["id"] == "print.render_size")
+    assert gate["ok"] is ok
+    if not ok:
+        assert gate["skipped"] is True
+
+
+def test_entry_gate_missing_output_files_fail_closed(tmp_path):
+    svg = tmp_path / "plain.svg"
+    svg.write_text(_minimal_entry_svg(barcode_block=_VALID_BARCODE), encoding="utf-8")
+    results = print_profile.run_entry_gates(
+        svg=svg,
+        png=tmp_path / "missing.png",
+        jpg=tmp_path / "missing.jpg",
+        package={"type": "label", "barcode": "8801234567890"},
+        width=400,
+        max_height=600,
+        allow=True,
+    )
+    assets = next(item for item in results if item["id"] == "print.assets")
+    assert assets["ok"] is False and assets["skipped"] is True
+    assert "없음" in assets["detail"]
+
+    with pytest.raises(print_profile.PrintGateError) as exc:
+        print_profile.run_entry_gates(
+            svg=svg,
+            png=tmp_path / "missing.png",
+            jpg=tmp_path / "missing.jpg",
+            package={"type": "label", "barcode": "8801234567890"},
+            width=400,
+            max_height=600,
+        )
+    assert "print.assets" in str(exc.value)
+
+
+def test_entry_allow_print_checks_survives_missing_outputs(tmp_path):
+    """allow 우회는 게이트 실패(파일 없음 포함)를 건너뛰고 meta를 쓴다."""
+
+    def noop_convert(svg, out, width, max_height=3000):
+        return None
+
+    def noop_jpg(png, out, quality=90):
+        return None
+
+    spec = _entry_spec(allow_print_checks=True)
+    svg = tmp_path / "plain.svg"
+    svg.write_text(_minimal_entry_svg(barcode_block=_VALID_BARCODE), encoding="utf-8")
+    ctx = base.ProfileContext(
+        convert_png=noop_convert, to_jpg=noop_jpg, run_dir=tmp_path / "run"
+    )
+    profile = base.get_profile("print")
+    variant = profile.plan({}, spec, [])[0]
+
+    result = profile.pack(
+        [{**variant, "svg": str(svg)}], spec, {"profile_ctx": ctx, "spec": spec}
+    )
+    meta = json.loads((Path(result["dir"]) / "meta.json").read_text(encoding="utf-8"))
+    assert meta["gates_ok"] is False
+    assert (Path(result["dir"]) / "entry.md").is_file()
+    item = result["items"][0]
+    assert item["png_size"] == 0 and item["jpg_size"] == 0
+    assert item["sha256"] is None
+
+
+def test_entry_gate_broken_svg_fails_closed(tmp_path):
+    svg = tmp_path / "broken.svg"
+    svg.write_text("<svg", encoding="utf-8")
+    results_gate = print_profile.run_entry_gates(
+        svg=svg,
+        png=_write_png(tmp_path / "front.png"),
+        jpg=_write_png(tmp_path / "front.jpg"),
+        package={"type": "pouch", "barcode": "8801234567890"},
+        width=400,
+        max_height=600,
+        allow=True,
+    )
+    layers = next(item for item in results_gate if item["id"] == "print.layers")
+    assert layers["ok"] is False and layers["skipped"] is True
+    assert "해석할 수 없다" in layers["detail"]
+
+    with pytest.raises(print_profile.PrintGateError) as exc:
+        print_profile.run_entry_gates(
+            svg=svg,
+            png=_write_png(tmp_path / "front.png"),
+            jpg=_write_png(tmp_path / "front.jpg"),
+            package={"type": "pouch", "barcode": "8801234567890"},
+            width=400,
+            max_height=600,
+        )
+    assert "print.layers" in str(exc.value)
+
+
+def test_entry_gate_render_size_over_cap_fails_closed(tmp_path, monkeypatch):
+    calls = _record_exec(monkeypatch, [], png_size=(900, 900))
+    spec = _entry_spec(package=_package(type="pouch"))
+    svg = tmp_path / "pouch.svg"
+    svg.write_text(_pouch_svg_text(), encoding="utf-8")
+    ctx = base.ProfileContext(run_dir=tmp_path / "run")
+    profile = base.get_profile("print")
+    variant = profile.plan({}, spec, [])[0]
+
+    with pytest.raises(print_profile.PrintGateError) as exc:
+        profile.pack(
+            [{**variant, "svg": str(svg)}],
+            spec,
+            {"profile_ctx": ctx, "spec": spec},
+        )
+    _assert_only_vectorcraft(calls)
+    assert "print.render_size" in str(exc.value)
+    assert "상한" in str(exc.value)
+
+
+def test_entry_gate_zero_byte_output_fails_closed(tmp_path):
+    def empty_convert(svg, out, width, max_height=3000):
+        Path(out).write_bytes(b"")
+
+    def empty_jpg(png, out, quality=90):
+        Path(out).write_bytes(b"")
+
+    spec = _entry_spec(package=_package(type="pouch"))
+    svg = tmp_path / "pouch.svg"
+    svg.write_text(_pouch_svg_text(), encoding="utf-8")
+    ctx = base.ProfileContext(
+        convert_png=empty_convert, to_jpg=empty_jpg, run_dir=tmp_path / "run"
+    )
+    profile = base.get_profile("print")
+    variant = profile.plan({}, spec, [])[0]
+
+    with pytest.raises(print_profile.PrintGateError) as exc:
+        profile.pack(
+            [{**variant, "svg": str(svg)}],
+            spec,
+            {"profile_ctx": ctx, "spec": spec},
+        )
+    assert "print.assets" in str(exc.value)
+    assert "0바이트" in str(exc.value)
+    assert not (tmp_path / "run" / "pack" / "meta.json").exists()
+
+
+def test_entry_allow_print_checks_completes_with_skipped_gates(tmp_path, monkeypatch):
+    calls = _record_exec(monkeypatch, [])
+    text = re.sub(r'<g id="fold".*?</g>', "", _pouch_svg_text(), flags=re.S)
+    svg = tmp_path / "pouch.svg"
+    svg.write_text(text, encoding="utf-8")
+    spec = _entry_spec(package=_package(type="pouch"), allow_print_checks=True)
+    ctx = base.ProfileContext(run_dir=tmp_path / "run")
+    profile = base.get_profile("print")
+    variant = profile.plan({}, spec, [])[0]
+
+    result = profile.pack(
+        [{**variant, "svg": str(svg)}],
+        spec,
+        {"profile_ctx": ctx, "spec": spec},
+    )
+    _assert_only_vectorcraft(calls)
+    meta = json.loads((Path(result["dir"]) / "meta.json").read_text(encoding="utf-8"))
+    assert meta["gates_ok"] is False
+    layers = next(gate for gate in meta["gates"] if gate["id"] == "print.layers")
+    assert layers["skipped"] is True
+    manifest = json.loads(
+        (tmp_path / "run" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["status"] == "warn"
+
+
+@pytest.mark.parametrize("value", [0, 1, "false", "true", [], None])
+def test_entry_mode_requires_strict_true_for_handoff(tmp_path, monkeypatch, value):
+    """`True`만 핸드오프다 — 문자열·정수·빈 값은 엔트리로 본다."""
+    calls = _record_exec(monkeypatch, [])
+    spec = _print_spec(package=_package(type="pouch"), print_ready=value)
+    svg = tmp_path / "pouch.svg"
+    svg.write_text(_pouch_svg_text(), encoding="utf-8")
+    ctx = base.ProfileContext(run_dir=tmp_path / "run")
+    profile = base.get_profile("print")
+    variant = profile.plan({}, spec, [])[0]
+
+    result = profile.pack(
+        [{**variant, "svg": str(svg)}],
+        spec,
+        {"profile_ctx": ctx, "spec": spec},
+    )
+    _assert_only_vectorcraft(calls)
+    meta = json.loads((Path(result["dir"]) / "meta.json").read_text(encoding="utf-8"))
+    assert meta["mode"] == "entry"
+    assert "pdf" not in result["items"][0]
 
 
 def test_print_mockups_are_deterministic(tmp_path):
