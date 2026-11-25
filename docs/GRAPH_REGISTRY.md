@@ -188,6 +188,34 @@ manifest 상태는 `warn`). 문자열 `"false"` 같은 값은 우회로 인정�
 - `export_print.py`는 Chromium을 쓴다. snap Chromium은 `/tmp`(PrivateTmp)를 읽지 못하므로
   실행 루트(`SONAGI_OUT_ROOT`)가 Chromium에서 접근 가능한 경로여야 한다.
 
+#### 컨테이너 툴체인 (GRAPH-19)
+
+게이트는 호스트가 아니라 **langgraph 컨테이너 안에서** 돈다. 호스트 E2E가 통과해도
+컨테이너에 도구가 없으면 `print.export`·`print.fonts`·`print.inkcov`가 전부 실패한다.
+이미지에는 다음 세 패키지가 필요하고, `langgraph.json`의 `dockerfile_lines`가
+빌드 시 한 레이어로 설치한다.
+
+| 패키지 | 제공 바이너리 | 쓰는 게이트 |
+| --- | --- | --- |
+| `ghostscript` | `gs` | `print.inkcov`, `export_print.py`의 CMYK 변환 |
+| `poppler-utils` | `pdffonts` | `print.fonts` |
+| `chromium` | `chromium` | `export_print.py`의 SVG→PDF 렌더 |
+
+```
+RUN apt-get update && apt-get install -y --no-install-recommends ghostscript poppler-utils chromium && rm -rf /var/lib/apt/lists/*
+```
+
+베이스 이미지는 `python:3.11-slim`(= Debian trixie)이다. Debian의 패키지명은 `chromium`
+하나로 끝난다(`chromium-browser`는 우분투 계열 이름). 도구 확인은 컨테이너에서 한다.
+
+```bash
+docker exec sonagi-graph-langgraph-api-1 sh -lc "command -v gs pdffonts chromium"
+```
+
+**Inkscape는 넣지 않는다.** brand profile의 SVG 조작은 마운트된 `vectorcraft-cli`가 맡고,
+print 경로는 Chromium+Ghostscript만 쓴다. Inkscape를 넣으면 이미지가 수백 MB 늘어나는데
+얻는 게 없다.
+
 ### 8.3 brand
 
 `spec["brand"]`가 계약이다. 마크는 **사용자가 만든 SVG**이며(`mark_path` 필수),

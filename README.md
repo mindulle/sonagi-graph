@@ -71,6 +71,10 @@ Kimaki 흐름:
 langgraph up -p 8123 --recreate -d docker-compose.deploy.yml
 ```
 
+이미지에는 인쇄 게이트용 `ghostscript`·`poppler-utils`·`chromium`이 들어 있다
+(`langgraph.json`의 `dockerfile_lines`). 해당 줄을 바꾼 뒤에는 위 명령을 다시 돌려
+이미지를 재빌드해야 한다. 자세한 내용은 `docs/GRAPH_REGISTRY.md` §8.2.
+
 호스트 서비스(CLIProxyAPI `:38107`, SearXNG `:8080`)는 Docker 브릿지 IP(`172.19.0.1`)로 접근한다.
 컨테이너는 root로 돌기 때문에 마운트된 볼트·CDN에 root 소유 파일이 생긴다(필요하면 `chown`).
 
