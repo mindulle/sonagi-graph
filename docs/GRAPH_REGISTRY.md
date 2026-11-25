@@ -188,39 +188,23 @@ manifest 상태는 `warn`). 문자열 `"false"` 같은 값은 우회로 인정�
 - `export_print.py`는 Chromium을 쓴다. snap Chromium은 `/tmp`(PrivateTmp)를 읽지 못하므로
   실행 루트(`SONAGI_OUT_ROOT`)가 Chromium에서 접근 가능한 경로여야 한다.
 
-#### 컨테이너 툴체인 (GRAPH-19)
+### 8.3 입상 후 핸드오프 도구
 
-게이트는 호스트가 아니라 **langgraph 컨테이너 안에서** 돈다. 호스트 E2E가 통과해도
-컨테이너에 도구가 없으면 `print.export`·`print.fonts`·`print.inkcov`가 전부 실패한다.
-이미지에는 다음 세 패키지가 필요하고, `langgraph.json`의 `dockerfile_lines`가
-빌드 시 한 레이어로 설치한다.
+인쇄용 변환은 **입상 후 핸드오프 단계**의 일이다. 콘테스트 심사는 표현물 이미지로 이뤄지고,
+CMYK·PDF/X·도련은 당선된 뒤 인쇄소에 넘길 때만 의미가 있다. 그래서 `ghostscript`(`gs`)·
+`poppler-utils`(`pdffonts`)·`chromium` 설치는 **지금 하지 않는다**. langgraph 이미지에도 넣지
+않고, handoff 단계를 실제로 켤 때 실행 환경에 갖춘다(GRAPH-19 결정, 2026-11-25).
 
-| 패키지 | 제공 바이너리 | 쓰는 게이트 |
-| --- | --- | --- |
-| `ghostscript` | `gs` | `print.inkcov`, `export_print.py`의 CMYK 변환 |
-| `poppler-utils` | `pdffonts` | `print.fonts` |
-| `chromium` | `chromium` | `export_print.py`의 SVG→PDF 렌더 |
+- entry print profile은 이 세 도구를 **요구하지 않아야** 한다. 도구가 없어도 표현물
+  (PNG/JPG·목업)은 나와야 하고, `print.export_check`·`print.fonts`·`print.inkcov`는
+  handoff 게이트에서만 돈다. 없는 상태에서 entry가 실패하면 그건 회귀다.
+- Inkscape는 필요 없다. 마크·SVG 조작과 래스터화는 마운트된 `vectorcraft-cli`가 맡는다.
+  Inkscape를 넣으면 이미지가 수백 MB 늘어나는데 얻는 게 없다.
+- handoff를 켤 때 필요한 것은 §8.2의 handoff 게이트와 같은 도구다: `ghostscript`(`gs`),
+  `poppler-utils`(`pdffonts`), `chromium`, 그리고 `export_print.py`가 검사 단계에서 쓰는
+  `pypdf`. 그때 이미지·실행 환경에 함께 넣는다.
 
-`export_print.py`는 마지막 검사에 `pypdf`를 import한다. 없으면 렌더를 다 끝내고도
-`ModuleNotFoundError`로 죽어 `print.export`가 실패하므로, 파이썬 의존성으로 함께 고정한다
-(`pyproject.toml`).
-
-```
-RUN apt-get update && apt-get install -y --no-install-recommends ghostscript poppler-utils chromium && rm -rf /var/lib/apt/lists/*
-```
-
-베이스 이미지는 `python:3.11-slim`(= Debian trixie)이다. Debian의 패키지명은 `chromium`
-하나로 끝난다(`chromium-browser`는 우분투 계열 이름). 도구 확인은 컨테이너에서 한다.
-
-```bash
-docker exec sonagi-graph-langgraph-api-1 sh -lc "command -v gs pdffonts chromium"
-```
-
-**Inkscape는 넣지 않는다.** brand profile의 SVG 조작은 마운트된 `vectorcraft-cli`가 맡고,
-print 경로는 Chromium+Ghostscript만 쓴다. Inkscape를 넣으면 이미지가 수백 MB 늘어나는데
-얻는 게 없다.
-
-### 8.3 brand
+### 8.4 brand
 
 `spec["brand"]`가 계약이다. 마크는 **사용자가 만든 SVG**이며(`mark_path` 필수),
 그래프는 마크를 그리지 않고 납품 가능한 상태로만 만든다. `palette`
