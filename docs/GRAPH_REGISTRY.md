@@ -116,11 +116,11 @@
 
 | 파일 | baseline | 해소 시점 |
 | --- | --- | --- |
-| `graphs/video_ops_graph.py` | 5 | W2 video_ops core 이관 |
 | `graphs/design_ops_graph.py` | 4 | W2 design_ops core 이관 |
-| `graphs/entry_pack_graph.py` | 2 | W2 entry_pack core 이관 |
 | `graphs/logo_design_graph.py` | 1 | W4 logo_design 병합 |
 | `graphs/asset_craft_graph.py` | 1 | W4 asset_craft 흡수 |
+
+- 해소 완료: `video_ops`(5→0, #61)·`entry_pack`(2→0, #60)은 baseline에서 제거했다. 남은 3개 파일도 0건이 되면 같은 방식으로 항목을 지운다.
 
 - 동작: 신규 파일의 직접 호출, 또는 baseline을 넘는 추가 호출이 있으면 exit 1. baseline보다 줄면 "항목을 삭제하세요" 안내만 낸다(실패 아님).
 - W4 종료 후 `--strict`(baseline 무시)를 CI 기본값으로 올린다. 그때가 §5 완료 정의 5번이 닫히는 지점이다.
