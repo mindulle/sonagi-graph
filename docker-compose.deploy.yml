@@ -7,6 +7,8 @@
 # 컨테이너는 이 호스트의 다음 자원을 쓴다:
 #   - llm-wiki            검증 리포트·지식 카탈로그 저장
 #   - sonagi-assets       브랜드 토큰·에셋 카탈로그 (brand.py)
+#   - /home/ubuntu/entry_pack  entry_pack 산출물(호스트에서 바로 열람)
+#   - 로컬 폰트           ~/.local/share/fonts (브랜드 아웃라인 폰트)
 #   - MDS tokens          design_token_sync 정본
 #   - craft CLIs          video_ops / design_ops / asset_craft
 #   - /var/www/craft-suite  video_ops CDN 배포
@@ -17,6 +19,9 @@ services:
     volumes:
       - /home/ubuntu/llm-wiki:/home/ubuntu/llm-wiki
       - /home/ubuntu/sonagi-assets:/home/ubuntu/sonagi-assets
+      - /home/ubuntu/entry_pack:/tmp/entry_pack
+      - /home/ubuntu/entry_pack:/home/ubuntu/entry_pack
+      - /home/ubuntu/.local/share/fonts:/usr/share/fonts/local:ro
       - /usr/share/fonts:/usr/share/fonts:ro
       - /home/ubuntu/mindulle-design-system/packages/tokens:/home/ubuntu/mindulle-design-system/packages/tokens:ro
       - /var/www/craft-suite:/var/www/craft-suite
@@ -33,6 +38,10 @@ services:
       # scripts/sync_catalog.sh가 devops에서 동기화하는 실카탈로그(14k items).
       # 파일이 없으면 graphs/core/env.py가 골든 카탈로그로 경고 폴백한다.
       SONAGI_CATALOG: /home/ubuntu/sonagi-assets/catalog/catalog.json
+      # entry_pack 산출물은 호스트와 같은 경로에 쓴다. 상태에 기록되는 manifest
+      # 경로가 호스트에서도 그대로 열려야 `graph_cli show`가 읽을 수 있다.
+      # (/tmp/entry_pack 마운트는 /tmp를 하드코딩한 옛 호출부용으로 남긴다)
+      SONAGI_ENTRY_OUT: /home/ubuntu/entry_pack
       SONAGI_WIKI_DIR: /home/ubuntu/llm-wiki
       SONAGI_CDN_VIDEO_DIR: /var/www/craft-suite/video/exports
       MDS_TOKENS_DIR: /home/ubuntu/mindulle-design-system/packages/tokens
