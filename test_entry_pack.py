@@ -278,3 +278,65 @@ def test_hitl_auto_select_spreads_directions():
     ]
     result = mod.hitl_node({"options": options, "approval_status": "approved"})
     assert result["selection"] == ["a1", "b1", "c1"]
+
+
+def test_l3_determinism_same_seed(monkeypatch, tmp_path):
+    """L3: 같은 입력·같은 시드 2회 → 변주 id와 렌더 manifest 해시가 동일하다."""
+    styles = [
+        {"id": f"s{i}", "name": f"style-{i}", "axes": {"palette": "editorial"}}
+        for i in range(4)
+    ]
+    monkeypatch.setattr(mod.craft, "load_registry", lambda _dir: styles)
+    monkeypatch.setattr(mod, "OUT_ROOT", tmp_path)
+
+    def fake_run(args, timeout=300):
+        """렌더·임포트 스크립트 대체 — 산출물만 결정론적으로 만든다."""
+        argv = [str(a) for a in args]
+        script = Path(argv[1]).name
+        out = Path(argv[argv.index("--out") + 1])
+        if script == "import_content.py":
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text('{"items": []}', encoding="utf-8")
+        elif script == "render_recipe.py":
+            out.mkdir(parents=True, exist_ok=True)
+            (out / f"{out.name}.svg").write_text(
+                f'<svg width="1440" height="1924"><!-- {out.name} --></svg>',
+                encoding="utf-8",
+            )
+            (out / f"{out.name}.manifest.json").write_text(
+                json.dumps({"id": out.name}), encoding="utf-8"
+            )
+        return ""
+
+    monkeypatch.setattr(mod, "_run", fake_run)
+    state = {
+        "brief": "차분한 티 브랜드 랜딩",
+        "content": "차분한 티 브랜드 랜딩 — 결정론 확인",
+        "run_id": "entry-l3",
+        "spec": {
+            "platform": "99designs",
+            "seed": "l3-seed",
+            "styles_per_direction": 2,
+            "breakpoints": ["desktop"],
+            "themes": ["light", "dark"],
+            "variant_cap": 8,
+        },
+        "directions": [{"title": "A", "description": "a", "motifs": ["m"]}],
+    }
+
+    def once():
+        variants = mod.variants_node(state)["variants"]
+        rendered = mod.render_node({**state, "variants": variants})
+        return [v["id"] for v in variants], rendered["manifest_digest"]
+
+    ids_first, digest_first = once()
+    ids_second, digest_second = once()
+
+    assert ids_first == ids_second
+    assert digest_first == digest_second
+    manifest = json.loads(
+        (tmp_path / "entry-l3" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["inputs"]["seed"] == "l3-seed"
+    assert manifest["artifacts"]
+    assert all(row["sha256"] for row in manifest["artifacts"])

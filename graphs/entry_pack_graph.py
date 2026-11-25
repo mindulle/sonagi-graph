@@ -57,7 +57,6 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 import urllib.parse
 import urllib.request
@@ -71,17 +70,22 @@ from langchain_core.prompts import ChatPromptTemplate  # noqa: E402
 from langgraph.graph import END, START, StateGraph  # noqa: E402
 
 import craft  # noqa: E402
+from graphs.core import artifacts as core_artifacts  # noqa: E402
+from graphs.core import env as core_env  # noqa: E402
+from graphs.core import exec as core_exec  # noqa: E402
 from graphs.llm import chat_model  # noqa: E402
 
-ASSETS_DIR = Path(os.environ.get("SONAGI_ASSETS_DIR", "/home/ubuntu/sonagi-assets"))
-CATALOG = Path(
-    os.environ.get("SONAGI_CATALOG", str(ASSETS_DIR / "test_data/golden/catalog.json"))
-)
-TOKENS = ASSETS_DIR / "tokens/semantic.json"
-WIKI_DIR = Path(os.environ.get("SONAGI_WIKI_DIR", "/home/ubuntu/llm-wiki"))
-OUT_ROOT = Path(os.environ.get("SONAGI_ENTRY_OUT", "/tmp/entry_pack"))
-SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://localhost:8080")
-VECTORCRAFT = os.environ.get("VECTORCRAFT_BIN", "vectorcraft-cli")
+#: 경로·주소는 core/env가 단일 정의한다. 여기 이름은 기존 호출부·테스트를 위한 얇은
+#: 별칭일 뿐, 기본값을 다시 선언하지 않는다(`SONAGI_ENTRY_OUT` 별칭은 core가 안다).
+_PATHS = core_env.load_paths()
+
+ASSETS_DIR: Path = _PATHS.assets_dir
+CATALOG: Path = _PATHS.catalog
+TOKENS: Path = _PATHS.tokens
+WIKI_DIR: Path = _PATHS.wiki_dir
+OUT_ROOT: Path = core_env.out_root("entry_pack")
+SEARXNG_URL: str = _PATHS.searxng_url
+VECTORCRAFT: str = _PATHS.vectorcraft
 
 DEFAULT_SPEC: Dict[str, Any] = {
     "platform": "generic",
@@ -121,29 +125,75 @@ class EntryState(TypedDict, total=False):
 
 
 def _run(args, timeout: int = 300) -> str:
-    done = subprocess.run(
-        [str(a) for a in args],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        cwd=str(ASSETS_DIR),
+    """core/exec로 실행한다. 실패는 `CommandError`(RuntimeError)로 올라온다.
+
+    호출부·테스트가 monkeypatch할 수 있도록 얇은 래퍼만 남긴다.
+    """
+    result = core_exec.run([str(arg) for arg in args], timeout=timeout, cwd=ASSETS_DIR)
+    return result.stdout
+
+
+def _artifact_entry(path: Any, root: Path) -> Optional[Dict[str, Any]]:
+    """manifest 항목 하나. 실행 루트 밖 파일은 절대 경로로 남긴다."""
+    target = Path(path)
+    if not target.is_file():
+        return None
+    try:
+        return core_artifacts.artifact_entry(target, root=root)
+    except ValueError:  # root 밖(예: 외부 브리프 파일)
+        return core_artifacts.artifact_entry(target)
+
+
+def _collect_artifacts(paths: List[Any], root: Path) -> List[Dict[str, Any]]:
+    """경로 목록 → manifest 산출물 항목(중복 제거, 순서 유지)."""
+    rows: List[Dict[str, Any]] = []
+    seen = set()
+    for path in paths:
+        entry = _artifact_entry(path, root)
+        if entry is None or entry["path"] in seen:
+            continue
+        seen.add(entry["path"])
+        rows.append(entry)
+    return rows
+
+
+def _build_manifest(
+    state: EntryState,
+    run_dir: Path,
+    artifacts: List[Dict[str, Any]],
+    *,
+    status: str = "ok",
+) -> Dict[str, Any]:
+    """입력 지문(브리프 해시·시드·spec 해시)과 산출물 해시를 담은 run manifest."""
+    spec = state.get("spec") or {}
+    brief = str(state.get("content") or state.get("brief") or "")
+    return core_artifacts.build_manifest(
+        run_id=run_dir.name,
+        kind="entry_pack",
+        status=status,
+        inputs={
+            "brief_sha256": core_artifacts.sha256_bytes(brief.encode("utf-8")),
+            "seed": str(spec.get("seed") or ""),
+            "spec_sha256": core_artifacts.sha256_json(spec),
+        },
+        artifacts=artifacts,
+        meta={
+            "platform": spec.get("platform"),
+            "media": spec.get("media"),
+            "variants": len(state.get("variants") or []),
+            "selection": list(state.get("selection") or []),
+        },
     )
-    if done.returncode != 0:
-        raise RuntimeError(
-            f"실패: {' '.join(map(str, args))}\n{done.stdout[-600:]}\n{done.stderr[-600:]}"
-        )
-    return done.stdout
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _svg_size(path: Path) -> tuple[float, float]:
     head = path.read_text(encoding="utf-8")[:400]
     width = re.search(r'<svg[^>]*\bwidth="([0-9.]+)', head)
     height = re.search(r'<svg[^>]*\bheight="([0-9.]+)', head)
-    return (float(width.group(1)) if width else 1200.0, float(height.group(1)) if height else 900.0)
+    return (
+        float(width.group(1)) if width else 1200.0,
+        float(height.group(1)) if height else 900.0,
+    )
 
 
 def _svg_width(path: Path) -> float:
@@ -197,11 +247,10 @@ def _searxng(query: str, limit: int = 5) -> List[Dict[str, str]]:
 def _wiki_notes(query: str, limit: int = 3) -> List[Dict[str, str]]:
     if not WIKI_DIR.is_dir():
         return []
-    done = subprocess.run(
+    done = core_exec.run(
         ["rg", "-il", "--glob", "*.md", query, str(WIKI_DIR)],
-        capture_output=True,
-        text=True,
         timeout=20,
+        check=False,
     )
     notes = []
     for line in done.stdout.splitlines()[:limit]:
@@ -417,7 +466,26 @@ def render_node(state: EntryState) -> Dict[str, Any]:
             }
         )
 
-    return {"recipe": str(recipe), "renders": renders, "status": "rendered"}
+    render_paths: List[Any] = []
+    for render in renders:
+        render_paths.append(render["svg"])
+        if render.get("manifest"):
+            render_paths.append(render["manifest"])
+    manifest = _build_manifest(
+        {**state, "renders": renders},
+        run_dir,
+        _collect_artifacts(render_paths, run_dir),
+        status="rendered",
+    )
+    manifest_path = core_artifacts.write_manifest(run_dir, manifest)
+
+    return {
+        "recipe": str(recipe),
+        "renders": renders,
+        "manifest": str(manifest_path),
+        "manifest_digest": core_artifacts.manifest_digest(manifest),
+        "status": "rendered",
+    }
 
 
 def critic_node(state: EntryState) -> Dict[str, Any]:
@@ -598,7 +666,7 @@ def pack_node(state: EntryState) -> Dict[str, Any]:
                 "jpg": str(jpg),
                 "png_size": png.stat().st_size,
                 "jpg_size": jpg.stat().st_size,
-                "sha256": _sha256(png),
+                "sha256": core_artifacts.sha256_file(png),
                 "description": _describe(state, option),
             }
         )
@@ -631,11 +699,22 @@ def pack_node(state: EntryState) -> Dict[str, Any]:
         ]
     (pack_dir / "entry.md").write_text("\n".join(lines), encoding="utf-8")
 
+    artifact_paths: List[Any] = []
+    for item in items:
+        artifact_paths += [item["svg"], item["png"], item["jpg"]]
+    artifact_paths += [pack_dir / "meta.json", pack_dir / "entry.md"]
+    manifest = _build_manifest(
+        state, run_dir, _collect_artifacts(artifact_paths, run_dir)
+    )
+    manifest_path = core_artifacts.write_manifest(run_dir, manifest)
+
     return {
         "entry": {
             "dir": str(pack_dir),
             "items": items,
             "meta": str(pack_dir / "meta.json"),
+            "manifest": str(manifest_path),
+            "manifest_digest": core_artifacts.manifest_digest(manifest),
         },
         "status": "packed",
     }
@@ -722,10 +801,29 @@ def mockup_node(state: EntryState) -> Dict[str, Any]:
                 "id": item["id"],
                 "card": str(card),
                 "poster": str(poster),
-                "card_sha256": _sha256(card),
+                "card_sha256": core_artifacts.sha256_file(card),
             }
         )
-    return {"mockups": mockups, "status": "mocked"}
+
+    manifest_path = entry.get("manifest")
+    if manifest_path and Path(manifest_path).is_file():
+        manifest = core_artifacts.read_manifest(manifest_path)
+        known = {row.get("path") for row in manifest.get("artifacts") or []}
+        rows = list(manifest.get("artifacts") or [])
+        for path in [p for m in mockups for p in (m["card"], m["poster"])]:
+            row = _artifact_entry(path, Path(manifest_path).parent)
+            if row is not None and row["path"] not in known:
+                rows.append(row)
+                known.add(row["path"])
+        manifest["artifacts"] = rows
+        manifest["status"] = "ok"
+        core_artifacts.write_manifest(manifest_path, manifest)
+        entry = {
+            **entry,
+            "manifest_digest": core_artifacts.manifest_digest(manifest),
+        }
+
+    return {"mockups": mockups, "entry": entry, "status": "mocked"}
 
 
 # ---------------------------------------------------------------------------
