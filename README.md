@@ -82,6 +82,14 @@ Kimaki 흐름:
 `scripts/graph_cli.py show <thread_id>`가 그대로 읽는다. `/tmp/entry_pack`에도 같은
 디렉터리가 붙어 있어 `/tmp`를 하드코딩한 호출부도 그대로 동작한다.
 
+폰트 마운트는 `/usr/share/fonts`(ro) **아래**로 들어가므로, 호스트에 그 디렉터리가
+먼저 있어야 한다. 없으면 컨테이너가 뜨지 않는다(`read-only file system`).
+호스트당 한 번만 만들면 된다.
+
+```bash
+sudo mkdir -p /usr/share/fonts/local
+```
+
 ```bash
 langgraph up -p 8123 --recreate -d docker-compose.deploy.yml
 ```
