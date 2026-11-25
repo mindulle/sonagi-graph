@@ -201,6 +201,10 @@ manifest 상태는 `warn`). 문자열 `"false"` 같은 값은 우회로 인정�
 | `poppler-utils` | `pdffonts` | `print.fonts` |
 | `chromium` | `chromium` | `export_print.py`의 SVG→PDF 렌더 |
 
+`export_print.py`는 마지막 검사에 `pypdf`를 import한다. 없으면 렌더를 다 끝내고도
+`ModuleNotFoundError`로 죽어 `print.export`가 실패하므로, 파이썬 의존성으로 함께 고정한다
+(`pyproject.toml`).
+
 ```
 RUN apt-get update && apt-get install -y --no-install-recommends ghostscript poppler-utils chromium && rm -rf /var/lib/apt/lists/*
 ```
