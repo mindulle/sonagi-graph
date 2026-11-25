@@ -18,6 +18,7 @@ PR 제목: <type>(<scope>): <한 줄 요약>
 - [ ] **결정론(L3)** 은 해당되는 경우에만 — 렌더·변환 계열은 같은 입력 2회 → 동일 해시를 확인했고, LLM·SearXNG 의존 그래프는 L3 대상이 아님을 밝혔다.
 - [ ] **그래프 레지스트리**(`docs/GRAPH_REGISTRY.md`)를 갱신했다 — 새 그래프는 분류표에 행을 추가했고, 통합·폐기 대상이면 목표 칸을 채웠다.
 - [ ] **직접 실행 없음** — `graphs/**` 에서 `subprocess`/`os.system`/`asyncio subprocess`를 직접 부르지 않는다. 프로세스 실행은 `graphs/core/exec.py` 경유이며 `python3 scripts/check_graph_rules.py` 가 통과한다.
+- [ ] **core 이관 PR이면** `scripts/check_graph_rules.py` 의 `LEGACY_BASELINE` 에서 이관한 파일 항목을 삭제했다. 남겨 두면 그 파일의 신규 직접 실행이 옛 상한만큼 통과한다.
 
 ## 스크립트를 추가했다면
 
