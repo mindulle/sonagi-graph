@@ -903,6 +903,19 @@ def single_color_svg(svg_text: str, color: str) -> str:
     return _PAINT.sub(replace, str(svg_text))
 
 
+def recolor_svg(svg_text: str, mapping: Mapping[str, str]) -> str:
+    """지정한 색만 다른 색으로 바꾼다(다크 배경용: ink → paper 등)."""
+    colors = {hex6(key): hex6(value) for key, value in mapping.items()}
+
+    def replace(match: "re.Match[str]") -> str:
+        value = (match.group(3) or "").strip().lower()
+        if not value or value in _NOT_A_COLOR or value.startswith("url("):
+            return match.group(0)
+        return f'{match.group(1)}="{colors.get(hex6(value), value)}"'
+
+    return _PAINT.sub(replace, str(svg_text))
+
+
 def image_stats(path: Path) -> Dict[str, Any]:
     """불투명 픽셀 수·비율·바운딩박스. 알파 128 초과만 센다."""
     from PIL import Image
