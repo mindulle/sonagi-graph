@@ -64,18 +64,23 @@ Kimaki 흐름:
 | 마운트 | 쓰는 그래프 |
 | --- | --- |
 | `/home/ubuntu/llm-wiki` | `editorial_verification`, `visual_consistency`, `knowledge_harvester`, `source_verification` |
-| `/home/ubuntu/sonagi-assets` | `design_ops`, `entry_pack`, `brand.py`, `adapters/assets.py` |
+| `/home/ubuntu/sonagi-assets` | `design_ops`, `entry_pack`, `brand.py` (카탈로그·토큰만, 라이브러리 없음) |
 | `/home/ubuntu/entry_pack` | `entry_pack` 산출물. 컨테이너의 `/tmp/entry_pack`(기본 `SONAGI_ENTRY_OUT`)에 같은 디렉터리로 붙는다 |
+| `~/.ssh/sonagi_render_*` → `/root/.ssh/*` (ro) | `entry_pack` 웹 렌더를 devops로 보내는 전용 키·config·known_hosts |
 | `~/.local/share/fonts` → `/usr/share/fonts/local` (ro) | 브랜드 아웃라인 폰트(`brand` 프로필의 `text-to-path`) |
 | `mindulle-design-system/packages/tokens` | `design_token_sync` |
 | `/usr/local/bin/{filmcraft,effectcraft,vectorcraft}-cli` | `video_ops`, `design_ops`, `entry_pack` |
 | `/var/www/craft-suite` | `video_ops` CDN 배포 |
 
-`/home/ubuntu/sonagi-assets`에는 카탈로그뿐 아니라 그 카탈로그가 가리키는 실자산
-라이브러리(7.2GB)가 있어야 한다. 두 파일 모두 devops에서 동기화한다 —
-`scripts/sync_catalog.sh` → `scripts/sync_library.sh` 순서. 라이브러리 동기화가
-카탈로그 경로(`/srv/...` → `/home/ubuntu/...`)까지 다시 쓴다.
-자세한 내용은 `docs/CATALOG_SYNC.md`.
+`/home/ubuntu/sonagi-assets`에는 카탈로그·토큰·스타일만 둔다. **자산 라이브러리
+(7.2GB)는 이 호스트에 두지 않는다** — 웹 렌더는 devops에서 돌고, 카탈로그·라이브러리는
+devops의 `/srv/sonagi-assets`를 그대로 쓴다. `graphs/adapters/remote_assets.py`가
+`scripts·styles·tokens·rules`만 `devops:/home/ubuntu/sonagi-entry-render`로 동기화한 뒤
+레시피를 복사해 렌더하고 SVG·manifest를 되가져온다. 컨테이너에는 전용 키
+(`sonagi_render_ed25519`)와 그 config·known_hosts만 `/root/.ssh`에 read-only로 붙는다.
+자세한 내용과 최초 설정은 `docs/REMOTE_RENDER.md`.
+
+카탈로그만 갱신하려면 `scripts/sync_catalog.sh`를 쓴다(라이브러리 동기화는 폐기).
 
 `entry_pack` 산출물은 호스트와 컨테이너에서 **같은 경로**(`/home/ubuntu/entry_pack`)에
 쓴다(`SONAGI_ENTRY_OUT`). 그래야 상태에 기록되는 manifest 경로를 호스트의

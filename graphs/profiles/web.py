@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 import craft
 from langchain_core.prompts import ChatPromptTemplate
 
+from graphs.adapters import remote_assets
 from graphs.core import artifacts as core_artifacts
 from graphs.llm import chat_model
 from graphs.profiles import base
@@ -254,6 +255,18 @@ class WebProfile:
         recipe = _ensure_recipe(ctx, run_dir)
 
         out = run_dir / variant["id"]
+        if remote_assets.enabled():
+            rendered = remote_assets.render(
+                recipe,
+                variant["style"],
+                variant["breakpoint"],
+                dark=variant.get("theme") == "dark",
+                out_dir=out,
+                paths=remote_assets.RemotePaths.from_env(assets_dir=ctx.assets_dir),
+                run=ctx.run,
+            )
+            return {**variant, **rendered, "renderer": "devops"}
+
         cmd = [
             sys.executable,
             ctx.assets_dir / "scripts/render_recipe.py",

@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# [폐기 · GRAPH-24] 로컬 자산 라이브러리 동기화.
+#
+# 웹 렌더는 이제 devops에서 돈다 — docs/REMOTE_RENDER.md.
+# 이 호스트에서 7.2GB 라이브러리가 다시 필요할 때만 비상용으로 쓴다.
+# 실수로 cron·자동화가 되살리지 않도록 SONAGI_ALLOW_LOCAL_LIBRARY=1 없이는
+# 아무것도 하지 않고 즉시 실패한다.
+#
 # devops의 실자산 라이브러리를 그래프 컨테이너가 마운트하는 자산 디렉터리로 동기화한다.
 #
 #   devops:/srv/sonagi-assets/library/     (약 7.2GB, 41,684 files)
@@ -37,6 +44,12 @@
 #   SONAGI_LIBRARY_EXCLUDES       rsync 제외 패턴(공백 구분). 기본 없음
 #   SONAGI_LIBRARY_SSH_OPTS       -o BatchMode=yes -o ConnectTimeout=15
 set -euo pipefail
+
+if [ "${SONAGI_ALLOW_LOCAL_LIBRARY:-0}" != "1" ]; then
+    printf '%s\n' "[sync_library] 폐기됨: 웹 렌더는 devops에서 돈다(docs/REMOTE_RENDER.md)." >&2
+    printf '%s\n' "  로컬 라이브러리가 정말 필요하면 SONAGI_ALLOW_LOCAL_LIBRARY=1 로 다시 실행한다." >&2
+    exit 1
+fi
 
 REMOTE_HOST="${SONAGI_LIBRARY_REMOTE_HOST:-devops}"
 REMOTE_DIR="${SONAGI_LIBRARY_REMOTE_DIR:-/srv/sonagi-assets/library}"
