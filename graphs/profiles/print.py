@@ -71,6 +71,8 @@ from graphs.profiles import presets as profile_presets
 MM = 96 / 25.4  # 1mm = 3.7795px
 PACKAGE_TYPES = ("label", "pouch")
 BLEED_MM = 3.0
+SAFE_PAD_MM = 6.0
+MARK_SIZE_MM = 14.0
 
 DEFAULT_SPEC: Dict[str, Any] = {
     "image_width": 2000,
@@ -80,6 +82,9 @@ DEFAULT_SPEC: Dict[str, Any] = {
     "allow_print_checks": False,
     # False(entry): 콘테스트 제출용 표현물만. True(handoff): 인쇄소 PDF/X까지.
     "print_ready": False,
+    # False(기본): PNG·JPG 표현물에서 전개도(dieline)·접힘선(fold)을 숨긴다.
+    # True면 가이드를 그대로 보여준다. 원본 SVG는 항상 두 레이어를 유지한다.
+    "guides": False,
     # 인쇄물은 방향/레퍼런스가 산출물에 쓰이지 않는다 — 네트워크·LLM 없이 결정론으로 돈다.
     "skip_knowledge": True,
     "skip_llm": True,
@@ -249,21 +254,103 @@ def ean_bars(digits: str) -> Tuple[List[Tuple[int, int]], int]:
     return bars, x
 
 
-def wrap_text(text: str, size_px: float, max_width: float) -> List[str]:
-    """CJK 1em · 라틴 0.55em 근사로 줄바꿈."""
-    lines: List[str] = []
-    current = ""
-    width = 0.0
+def _is_cjk(char: str) -> bool:
+    """한중일 문자는 한 글자씩 줄바꿈해도 뜻이 깨지지 않는다."""
+    return ord(char) >= 0x2E80
+
+
+def _char_width(char: str, size_px: float) -> float:
+    return size_px if _is_cjk(char) else size_px * 0.55
+
+
+def _text_width(text: str, size_px: float) -> float:
+    return sum(_char_width(char, size_px) for char in text)
+
+
+def _wrap_tokens(text: str) -> List[str]:
+    """줄바꿈 단위로 나눈다. CJK는 글자, 라틴은 공백으로 구분한 단어."""
+    tokens: List[str] = []
+    word = ""
     for char in text:
-        char_w = size_px if ord(char) >= 0x2E80 else size_px * 0.55
-        if width + char_w > max_width and current:
-            lines.append(current)
-            current, width = "", 0.0
-        current += char
-        width += char_w
-    if current:
+        if _is_cjk(char):
+            if word:
+                tokens.append(word)
+                word = ""
+            tokens.append(char)
+        elif char.isspace():
+            if word:
+                tokens.append(word)
+                word = ""
+            tokens.append(" ")
+        else:
+            word += char
+    if word:
+        tokens.append(word)
+    return tokens
+
+
+def wrap_text(text: str, size_px: float, max_width: float) -> List[str]:
+    """CJK는 1em 글자 단위, 라틴은 단어 단위로 줄바꿈한다.
+
+    라틴 단어는 중간에서 자르지 않는다. 한 단어가 폭을 넘을 때만 글자 단위로
+    쪼개고, 그 외에는 공백에서 줄을 바꾼다. 빈 줄(`\\n`)은 그대로 보존한다.
+    """
+    raw = str(text or "")
+    if not raw.strip():
+        return []
+    size_px = max(float(size_px), 1.0)
+    max_width = max(float(max_width), size_px)
+    lines: List[str] = []
+
+    for paragraph in raw.splitlines():
+        current = ""
+        width = 0.0
+        pending_space = False
+
+        for token in _wrap_tokens(paragraph):
+            if token == " ":
+                pending_space = bool(current)
+                continue
+
+            token_w = _text_width(token, size_px)
+            space_w = _char_width(" ", size_px) if pending_space else 0.0
+            if current and width + space_w + token_w > max_width:
+                lines.append(current)
+                current, width = "", 0.0
+                pending_space = False
+                space_w = 0.0
+
+            if pending_space and current:
+                current += " "
+                width += space_w
+            pending_space = False
+
+            if token_w > max_width:
+                # 한 단어가 한 줄보다 길 때만 글자 단위로 쪼갠다.
+                for char in token:
+                    char_w = _char_width(char, size_px)
+                    if current and width + char_w > max_width:
+                        lines.append(current)
+                        current, width = "", 0.0
+                    current += char
+                    width += char_w
+            else:
+                current += token
+                width += token_w
+
         lines.append(current)
+
     return lines
+
+
+def _hide_guide_layers(svg_text: str) -> str:
+    """표현물용 사본에서 전개도·접힘선 그룹을 숨긴다(레이어 삭제 아님)."""
+    pattern = re.compile(r'<g\b(?=[^>]*\bid="(?:dieline|fold)")', re.IGNORECASE)
+
+    def hide(match: re.Match[str]) -> str:
+        return match.group(0) + ' display="none"'
+
+    return pattern.sub(hide, svg_text)
 
 
 def _text(value: Any) -> str:
@@ -294,15 +381,62 @@ def _xml_package(package: Mapping[str, Any]) -> Dict[str, Any]:
     return escaped
 
 
+def _mark_box(
+    width_px: float, pad: float, has_mark: bool
+) -> Optional[Tuple[float, float, float]]:
+    """우상단 마크의 (x, y, size). 마크가 없으면 None."""
+    if not has_mark:
+        return None
+    size = MARK_SIZE_MM * MM
+    return width_px - pad - size, pad + 6, size
+
+
+def _origin_position(
+    width_px: float, pad: float, has_mark: bool
+) -> Tuple[float, float]:
+    """출처 텍스트의 (x, y). 마크가 있으면 겹치지 않게 마크 아래에 둔다.
+
+    기준선(baseline)은 마크 하단 + 폰트 크기(8px) + 여유(4px)다. x는 안전 여백
+    안쪽에서 오른쪽 정렬하므로 텍스트가 캔버스 밖으로 나가지 않는다.
+    """
+    box = _mark_box(width_px, pad, has_mark)
+    y = pad + 54 if box is None else box[1] + box[2] + 8 + 4
+    return width_px - pad, y
+
+
+_ORIGIN_TEXT_RE = re.compile(
+    r'<text\b[^>]*\btext-anchor="end"[^>]*>.*?</text>', re.IGNORECASE | re.DOTALL
+)
+
+
+def _relayout_origin(svg_text: str, package: Mapping[str, Any], width_px: float) -> str:
+    """출처 텍스트를 마크와 겹치지 않는 위치로 옮긴다(레이아웃 후처리).
+
+    `render_label.py`가 그리는 출처 텍스트는 우상단 마크와 같은 자리다. 원본
+    스크립트를 고치지 않고 SVG에서 위치만 다시 계산한다. 해당 텍스트가 없으면
+    원문을 그대로 돌려준다.
+    """
+    has_mark = bool(package.get("mark_path"))
+    x, y = _origin_position(width_px, SAFE_PAD_MM * MM, has_mark)
+
+    def move(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        tag = re.sub(r'\bx="[^"]*"', f'x="{x:.1f}"', tag, count=1)
+        tag = re.sub(r'\by="[^"]*"', f'y="{y:.1f}"', tag, count=1)
+        return tag
+
+    return _ORIGIN_TEXT_RE.sub(move, svg_text)
+
+
 def _mark_tag(package: Mapping[str, Any], width_px: float, pad: float) -> str:
     """mark_path(SVG)를 base64 이미지 태그로 만든다(없으면 빈 문자열)."""
     mark = package.get("mark_path")
     if not mark:
         return ""
     data = base64.b64encode(Path(str(mark)).read_bytes()).decode("ascii")
-    size = 14 * MM
-    x = width_px - pad - size
-    y = pad + 6
+    box = _mark_box(width_px, pad, True)
+    assert box is not None
+    x, y, size = box
     return (
         f'<image id="mark" x="{x:.1f}" y="{y:.1f}" width="{size:.1f}" height="{size:.1f}" '
         f'href="data:image/svg+xml;base64,{data}"/>'
@@ -311,7 +445,7 @@ def _mark_tag(package: Mapping[str, Any], width_px: float, pad: float) -> str:
 
 def _inject_mark(svg_text: str, package: Mapping[str, Any], width_px: float) -> str:
     """스크립트가 만든 SVG의 art 그룹 끝에 mark를 넣는다(라벨 경로)."""
-    tag = _mark_tag(package, width_px, 6 * MM)
+    tag = _mark_tag(package, width_px, SAFE_PAD_MM * MM)
     if not tag:
         return svg_text
     start = svg_text.find('<g id="art">')
@@ -359,6 +493,7 @@ def build_pouch_svg(package: Mapping[str, Any]) -> Tuple[str, Dict[str, Any]]:
     mark = _mark_tag(package, width, pad)
     if mark:
         parts.append(mark)
+    origin_x, origin_y = _origin_position(width, pad, bool(mark))
 
     parts_ing_y = pad + 92
     for line in wrap_text(str(package.get("ingredients", "")), 8, text_w):
@@ -384,7 +519,7 @@ def build_pouch_svg(package: Mapping[str, Any]) -> Tuple[str, Dict[str, Any]]:
         f'<text x="{bx + quiet + bars_w / 2:.1f}" y="{by + quiet + bars_h + 9:.1f}" '
         f'font-family="monospace" font-size="8" text-anchor="middle" fill="{_attr(ink)}">{_text(digits)}</text>',
         "</g>",
-        f'<text x="{width - pad:.1f}" y="{pad + 54:.1f}" font-family="monospace" font-size="8" '
+        f'<text x="{origin_x:.1f}" y="{origin_y:.1f}" font-family="monospace" font-size="8" '
         f'text-anchor="end" fill="{_attr(accent)}">{_text(package.get("origin", ""))}</text>',
         "</g>",
     ]
@@ -901,18 +1036,20 @@ class PrintProfile:
             )
             svg = out / f"{variant['id']}.svg"
             manifest_path = out / f"{variant['id']}.manifest.json"
-            # render_label.py는 mark를 모른다 — art 그룹 끝에 직접 넣고 해시를 갱신한다.
-            if package.get("mark_path") and svg.is_file():
+            # render_label.py는 mark를 모른다 — art 그룹 끝에 넣고, 출처 텍스트가
+            # 마크와 겹치지 않게 위치를 다시 잡은 뒤 해시를 갱신한다.
+            if svg.is_file():
                 original = svg.read_text(encoding="utf-8")
-                updated = _inject_mark(
-                    original, package, float(package["size_mm"][0]) * MM
-                )
+                width_px = float(package["size_mm"][0]) * MM
+                updated = _inject_mark(original, package, width_px)
+                updated = _relayout_origin(updated, package, width_px)
                 if updated != original:
                     svg.write_text(updated, encoding="utf-8")
                     if manifest_path.is_file():
                         data = json.loads(manifest_path.read_text(encoding="utf-8"))
                         data["sha256"] = hashlib.sha256(updated.encode()).hexdigest()
-                        data["mark"] = True
+                        if package.get("mark_path"):
+                            data["mark"] = True
                         manifest_path.write_text(
                             json.dumps(
                                 data, ensure_ascii=False, indent=2, sort_keys=True
@@ -989,32 +1126,32 @@ class PrintProfile:
         pack_dir = run_dir / "pack"
         pack_dir.mkdir(parents=True, exist_ok=True)
 
-        width = int(spec.get("image_width", 2000))
-        max_height = int(spec.get("max_height", 3000))
-        quality = int(spec.get("jpg_quality", 90))
-        if spec.get("platform"):
-            # 플랫폼을 명시한 인쇄 엔트리도 같은 프리셋 상한을 따른다(보드는 web 전용).
-            preset, _ = profile_presets.resolve_for_spec(spec)
-            width = int(spec.get("image_width") or preset.image_width)
-            max_height = int(spec.get("max_height") or preset.max_height)
-            quality = int(spec.get("jpg_quality") or preset.jpg_quality)
+        # 프리셋 해석: spec 값 → platform 프리셋 → generic. spec이 항상 이긴다.
+        preset, preset_warnings = profile_presets.resolve_for_spec(spec)
+        width = int(spec.get("image_width") or preset.image_width)
+        max_height = int(spec.get("max_height") or preset.max_height)
+        quality = int(spec.get("jpg_quality") or preset.jpg_quality)
+        naming = str(spec.get("naming") or preset.naming)
         bleed = float(spec.get("bleed_mm", BLEED_MM))
         # 테스트 우회는 명시적 bool true만 — 문자열 "false"가 게이트를 끄지 않게 한다.
         allow = spec.get("allow_print_checks") is True
         # handoff는 명시적 bool true만 — 기본은 엔트리(표현물) 단계다.
         handoff = spec.get("print_ready") is True
+        # 표현물 PNG·JPG에는 전개도·접힘선을 숨긴다. 명시적 bool true만 가이드를 켠다.
+        guides = spec.get("guides") is True
 
         packed: List[Dict[str, Any]] = []
         gates: List[Dict[str, Any]] = []
-        for item in items:
+        for index, item in enumerate(items, start=1):
             variant_id = item["id"]
+            stem = profile_presets.filename(naming, variant_id, index)
             svg = Path(item["svg"])
             size_mm = item.get("size_mm") or package["size_mm"]
             pdf: Optional[Path] = None
             item_gates: List[Dict[str, Any]] = []
             if handoff:
                 # 인쇄소 핸드오프: PDF/X 변환 + 도련·폰트·잉크 게이트.
-                print_dir = pack_dir / f"{variant_id}-print"
+                print_dir = pack_dir / f"{stem}-print"
                 try:
                     pdf = self._export_pdf(ctx, svg, size_mm, bleed, print_dir)
                 except Exception as exc:  # noqa: BLE001
@@ -1028,16 +1165,35 @@ class PrintProfile:
                         raise PrintGateError([failure]) from exc
                     failure["skipped"] = True
                     gates.append(failure)
-                    pdf = print_dir / f"{Path(svg).stem}.pdf"
+                    pdf = print_dir / f"{stem}.pdf"
+
+                if pdf is not None and pdf.is_file() and pdf.name != f"{stem}.pdf":
+                    renamed = pdf.with_name(f"{stem}.pdf")
+                    pdf.replace(renamed)
+                    pdf = renamed
 
                 item_gates = run_gates(
                     ctx, svg=svg, pdf=pdf, size_mm=size_mm, bleed=bleed, allow=allow
                 )
 
-            png = pack_dir / f"{variant_id}-front.png"
-            jpg = pack_dir / f"{variant_id}.jpg"
-            ctx.convert(svg, png, width, max_height)
-            ctx.jpeg(png, jpg, quality)
+            png = pack_dir / f"{stem}-front.png"
+            jpg = pack_dir / f"{stem}.jpg"
+            # 원본 SVG는 dieline·fold를 유지한다. 변환용 임시 사본에서만 숨긴다.
+            presentation = svg
+            presentation_copy: Optional[Path] = None
+            if not guides:
+                original = svg.read_text(encoding="utf-8")
+                hidden = _hide_guide_layers(original)
+                if hidden != original:
+                    presentation_copy = pack_dir / f".{stem}.presentation.svg"
+                    presentation_copy.write_text(hidden, encoding="utf-8")
+                    presentation = presentation_copy
+            try:
+                ctx.convert(presentation, png, width, max_height)
+                ctx.jpeg(png, jpg, quality)
+            finally:
+                if presentation_copy is not None:
+                    presentation_copy.unlink(missing_ok=True)
 
             if not handoff:
                 # 엔트리: PNG·JPG가 나온 뒤 구조 검사만 한다(외부 프로세스 없음).
@@ -1066,6 +1222,9 @@ class PrintProfile:
                 "png_size": png.stat().st_size if png.is_file() else 0,
                 "jpg_size": jpg.stat().st_size if jpg.is_file() else 0,
                 "sha256": core_artifacts.sha256_file(png) if png.is_file() else None,
+                # W8(preflight) 보고 — 렌더가 넘긴 값이 없으면 빈 목록/사전이다.
+                "skipped_assets": list(item.get("skipped_assets") or []),
+                "preflight": dict(item.get("preflight") or {}),
                 "gates": item_gates,
             }
             if pdf is not None:
@@ -1073,10 +1232,22 @@ class PrintProfile:
                 row["pdf_size"] = pdf.stat().st_size if pdf.is_file() else 0
             packed.append(row)
 
+        skipped_assets: List[Any] = []
+        preflight: Dict[str, Any] = {}
+        for row in packed:
+            skipped_assets.extend(row.get("skipped_assets") or [])
+            if row.get("preflight"):
+                preflight[row["id"]] = row["preflight"]
+
         meta = {
             "profile": "print",
             "mode": "handoff" if handoff else "entry",
             "print_ready": handoff,
+            "platform": spec.get("platform"),
+            "preset": preset.id,
+            "preset_warnings": preset_warnings,
+            "naming": naming,
+            "guides": guides,
             "package_type": package["type"],
             "inputs_sha256": core_artifacts.sha256_json(package),
             "brand": package["brand"],
@@ -1084,7 +1255,11 @@ class PrintProfile:
             "size_mm": package["size_mm"],
             "bleed_mm": bleed if handoff else None,
             "image_width": width,
+            "max_height": max_height,
+            "jpg_quality": quality,
             "allow_print_checks": allow,
+            "skipped_assets": skipped_assets,
+            "preflight": preflight,
             "gates_ok": all(item["ok"] for item in gates),
             "gates": gates,
             "items": packed,
@@ -1105,9 +1280,20 @@ class PrintProfile:
                 else " (콘테스트 제출: 표현물만)"
             ),
             f"- 입력 지문: `{meta['inputs_sha256'][:16]}`",
-            "",
-            "## 게이트",
         ]
+        if skipped_assets:
+            labels = []
+            for entry in skipped_assets:
+                if isinstance(entry, Mapping):
+                    labels.append(
+                        str(entry.get("path") or entry.get("reason") or entry)
+                    )
+                else:
+                    labels.append(str(entry))
+            head = ", ".join(labels[:5])
+            more = f" 외 {len(labels) - 5}건" if len(labels) > 5 else ""
+            lines.append(f"- 경고: 건너뛴 자산 {len(labels)}건 — {head}{more}")
+        lines += ["", "## 게이트"]
         for gate in gates:
             mark = "✓" if gate["ok"] else ("−" if gate.get("skipped") else "✗")
             lines.append(f"- {mark} {gate['id']}: {gate['detail']}")
@@ -1144,6 +1330,18 @@ class PrintProfile:
             kind="print",
             status="ok" if gates_ok else "warn",
             gates=gates,
+        )
+        # base.run_manifest는 platform만 남긴다. 프리셋·W8 보고를 해시 기록에도 남긴다.
+        manifest.setdefault("meta", {})
+        manifest["meta"].update(
+            {
+                "preset": preset.id,
+                "preset_warnings": preset_warnings,
+                "naming": naming,
+                "guides": guides,
+                "skipped_assets": skipped_assets,
+                "preflight": preflight,
+            }
         )
         manifest_path = core_artifacts.write_manifest(run_dir, manifest)
 

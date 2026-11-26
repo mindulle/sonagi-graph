@@ -138,6 +138,84 @@ def test_filename_pattern_is_safe_and_supports_index():
 
 
 # ---------------------------------------------------------------------------
+# spec_node 우선순위: profile 기본값 < 플랫폼 프리셋 < raw spec (GRAPH-28)
+# ---------------------------------------------------------------------------
+
+
+def _print_package():
+    return {
+        "type": "label",
+        "brand": "Mindulle Tea",
+        "product": "Earl Grey 50g",
+        "size_mm": [90, 120],
+    }
+
+
+def test_spec_node_applies_platform_preset_before_profile_defaults():
+    result = entry.spec_node(
+        {
+            "brief": "민들레 티 라벨",
+            "spec": {
+                "profile": "print",
+                "platform": "loudsourcing",
+                "package": _print_package(),
+            },
+        }
+    )
+    spec = result["spec"]
+    # print 기본값(2000/3000/90)이 프리셋을 덮어쓰지 않는다.
+    assert spec["image_width"] == 1600
+    assert spec["max_height"] == 2400
+    assert spec["jpg_quality"] == 88
+    assert spec["naming"] == "loudsourcing-{index:02d}-{id}"
+    assert spec["preset"] == "loudsourcing"
+
+
+def test_spec_node_lets_raw_spec_override_platform_preset():
+    result = entry.spec_node(
+        {
+            "brief": "민들레 티 라벨",
+            "spec": {
+                "profile": "print",
+                "platform": "loudsourcing",
+                "image_width": 1234,
+                "max_height": 2000,
+                "jpg_quality": 77,
+                "package": _print_package(),
+            },
+        }
+    )
+    spec = result["spec"]
+    assert spec["image_width"] == 1234
+    assert spec["max_height"] == 2000
+    assert spec["jpg_quality"] == 77
+    assert spec["naming"] == "loudsourcing-{index:02d}-{id}"
+    assert spec["preset"] == "loudsourcing"
+
+
+def test_spec_node_without_platform_keeps_profile_defaults():
+    result = entry.spec_node(
+        {
+            "brief": "민들레 티 라벨",
+            "spec": {"profile": "print", "package": _print_package()},
+        }
+    )
+    spec = result["spec"]
+    assert "preset" not in spec
+    assert spec["image_width"] == 2000
+    assert spec["max_height"] == 3000
+    assert spec["jpg_quality"] == 90
+
+
+def test_web_spec_node_also_uses_platform_preset_before_defaults():
+    result = entry.spec_node(
+        {"brief": "차분한 랜딩", "spec": {"platform": "loudsourcing", "skip_llm": True}}
+    )
+    assert result["spec"]["image_width"] == 1600
+    assert result["spec"]["max_height"] == 2400
+
+
+# ---------------------------------------------------------------------------
 # 엔트리 보드
 # ---------------------------------------------------------------------------
 
