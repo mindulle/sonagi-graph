@@ -1,23 +1,26 @@
 #!/usr/bin/env bash
-# sonagi-graph pull 배포 유닛 설치기.
+# sonagi-graph release-asset 배포 유닛 설치기.
 #
-#   1) ubuntu 사용자로 GHCR 로그인 + stable digest 확인 (--check)
-#   2) ubuntu 사용자로 실제 pull 성공 확인
-#   3) 위 둘이 모두 성공했을 때만 systemd 유닛을 복사하고 타이머를 켠다.
+#   1) ubuntu 사용자로 gh 인증 / 릴리스 목록 / zstd / 디스크 여유 확인
+#   2) ubuntu 사용자로 deploy 스크립트 --check (최신 image-* 태그 비교)
+#   3) 모두 성공했을 때만 systemd 유닛을 복사하고 타이머를 켠다.
 #
-# 하나라도 실패하면 아무 유닛도 건드리지 않는다. GHCR이 private이므로
-# read:packages 권한이 없으면 여기서 멈추는 것이 정상이다.
+# GHCR 로그인은 하지 않는다. 기존 repo-scoped gh 토큰으로 릴리스 자산을 받는다.
+# 하나라도 실패하면 유닛을 건드리지 않는다.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 EXPECTED_REPO="/home/ubuntu/sonagi-graph"
-IMAGE="${SONAGI_GRAPH_IMAGE:-ghcr.io/mindulle/sonagi-graph}"
-TAG="${SONAGI_GRAPH_TAG:-stable}"
+GITHUB_REPO="${SONAGI_GRAPH_GITHUB_REPO:-mindulle/sonagi-graph}"
+ASSET_NAME="${SONAGI_GRAPH_ASSET:-graph-image.tar.zst}"
 UNIT_DIR="/etc/systemd/system"
 TIMER="sonagi-graph-deploy.timer"
 SERVICE="sonagi-graph-deploy.service"
+PYTHON="${PYTHON:-python3}"
+DOCKER_ROOT="${SONAGI_GRAPH_DOCKER_ROOT:-/var/lib/docker}"
+MIN_FREE_KB="${SONAGI_GRAPH_MIN_FREE_KB:-2097152}"
 
 log() {
   printf '[install] %s\n' "$*" >&2
@@ -45,7 +48,7 @@ for file in \
   fi
 done
 
-for cmd in docker runuser systemctl; do
+for cmd in gh docker zstd runuser systemctl "$PYTHON" df; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     log "필수 명령이 없습니다: $cmd"
     exit 1
@@ -57,25 +60,89 @@ if ! id ubuntu >/dev/null 2>&1; then
   exit 1
 fi
 
-# 1) ubuntu 사용자로 인증 + digest 조회. --check는 배포하지 않는다.
-log "GHCR 인증과 digest 확인 (ubuntu 사용자)"
-if ! runuser -u ubuntu -- "$SCRIPT_DIR/sonagi-graph-deploy.sh" --check; then
-  log "GHCR 인증/조회 실패. 타이머를 켜지 않았습니다."
-  log "read:packages 권한을 먼저 해결하세요:"
-  log "  sudo -u ubuntu gh auth refresh -s read:packages"
-  log "  또는 /home/ubuntu/.secrets/ghcr.env 에 GHCR_USER/GHCR_TOKEN(read:packages PAT) 작성"
+as_ubuntu() {
+  runuser -u ubuntu -- env HOME=/home/ubuntu "$@"
+}
+
+# 1) gh 인증과 릴리스 목록. GHCR 로그인은 하지 않는다.
+log "gh 인증 확인 (ubuntu 사용자)"
+if ! as_ubuntu gh auth status >&2; then
+  log "gh 인증이 필요합니다: sudo -u ubuntu gh auth login"
+  exit 1
+fi
+if ! as_ubuntu gh release list --repo "$GITHUB_REPO" --limit 5 >&2; then
+  log "릴리스 목록을 읽지 못했습니다. 토큰 repo scope를 확인하세요."
   exit 1
 fi
 
-# 2) 실제 pull까지 성공해야 한다. digest 조회만 되고 blob pull이 막히는 경우를 거른다.
-log "이미지 pull 확인: $IMAGE:$TAG"
-if ! runuser -u ubuntu -- docker pull "$IMAGE:$TAG"; then
-  log "이미지를 pull할 수 없습니다. 타이머를 켜지 않았습니다."
-  log "read:packages 권한과 패키지 가시성(private)을 확인하세요."
+# 2) deploy 스크립트의 릴리스 태그 비교 (다운로드 없음)
+log "릴리스 태그 확인 (--check)"
+if ! as_ubuntu "$SCRIPT_DIR/sonagi-graph-deploy.sh" --check; then
+  log "릴리스 조회/상태 비교 실패. 타이머를 켜지 않았습니다."
   exit 1
 fi
 
-# 3) 유닛 설치. 여기까지 왔으면 인증과 pull이 검증됐다.
+# 3) 디스크 여유. 자산 크기의 3배 + 2GB를 요구한다.
+TAG="$(
+  as_ubuntu gh api "repos/$GITHUB_REPO/releases?per_page=20" |
+    "$PYTHON" -c '
+import json
+import sys
+
+data = json.load(sys.stdin)
+rows = []
+for release in data if isinstance(data, list) else []:
+    tag = (release.get("tag_name") or "").strip().lower()
+    if tag.startswith("image-"):
+        rows.append((release.get("created_at") or "", tag))
+rows.sort(reverse=True)
+print(rows[0][1] if rows else "")
+'
+)"
+if [ -z "$TAG" ]; then
+  log "$GITHUB_REPO 에 image-* 릴리스가 없습니다. Image 워크플로를 먼저 확인하세요."
+  exit 1
+fi
+
+ASSET_SIZE="$(
+  as_ubuntu gh release view "$TAG" --repo "$GITHUB_REPO" --json assets |
+    "$PYTHON" -c '
+import json
+import sys
+
+name = sys.argv[1]
+data = json.load(sys.stdin)
+for asset in data.get("assets", []) if isinstance(data, dict) else []:
+    if asset.get("name") == name:
+        print(int(asset.get("size", 0)))
+        break
+else:
+    sys.exit(1)
+' "$ASSET_NAME"
+)" || {
+  log "릴리스 $TAG 에 $ASSET_NAME 자산이 없습니다."
+  exit 1
+}
+
+if [ -d "$DOCKER_ROOT" ]; then
+  AVAIL_DOCKER="$(df -Pk "$DOCKER_ROOT" | awk 'NR==2{print $4}')"
+else
+  AVAIL_DOCKER="$(df -Pk / | awk 'NR==2{print $4}')"
+fi
+AVAIL_TMP="$(df -Pk /tmp | awk 'NR==2{print $4}')"
+if [ "$AVAIL_DOCKER" -lt "$AVAIL_TMP" ]; then
+  AVAIL_KB="$AVAIL_DOCKER"
+else
+  AVAIL_KB="$AVAIL_TMP"
+fi
+NEED_KB=$((ASSET_SIZE * 3 / 1024 + MIN_FREE_KB))
+log "디스크: 여유 ${AVAIL_KB}KB, 필요 ${NEED_KB}KB (자산 $((ASSET_SIZE / 1048576))MiB)"
+if [ "$AVAIL_KB" -lt "$NEED_KB" ]; then
+  log "디스크 여유가 부족합니다. 타이머를 켜지 않았습니다."
+  exit 1
+fi
+
+# 4) 유닛 설치. 여기까지 왔으면 gh/릴리스/zstd/디스크가 검증됐다.
 log "systemd 유닛 복사: $UNIT_DIR"
 install -m 0644 "$SCRIPT_DIR/$SERVICE" "$UNIT_DIR/$SERVICE"
 install -m 0644 "$SCRIPT_DIR/$TIMER" "$UNIT_DIR/$TIMER"

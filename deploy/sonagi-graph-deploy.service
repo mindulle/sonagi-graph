@@ -1,5 +1,5 @@
 [Unit]
-Description=sonagi-graph pull deploy (GHCR stable)
+Description=sonagi-graph release-asset deploy (GitHub prerelease image)
 Documentation=file:///home/ubuntu/sonagi-graph/docs/DEPLOY_GHCR.md
 Wants=network-online.target
 After=network-online.target docker.service
