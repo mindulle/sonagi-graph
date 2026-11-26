@@ -348,7 +348,7 @@ def test_gate_node_refuses_fewer_than_two_passing(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# HITL · 킷
+# spec 추가 검증
 # ---------------------------------------------------------------------------
 
 
@@ -377,6 +377,38 @@ def test_explore_alpha_palette_is_stripped_for_vectorcraft():
 # ---------------------------------------------------------------------------
 # HITL · 킷
 # ---------------------------------------------------------------------------
+
+
+def test_recolor_svg_only_maps_known_colors():
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg"><path fill="#161616" d="M0 0h1v1z"/>'
+        '<path stroke="#b4551f" fill="none" d="M0 0h1v1z"/></svg>'
+    )
+    out = brand_marks.recolor_svg(svg, {"#161616": "#fbf9f5"})
+    assert 'fill="#fbf9f5"' in out
+    assert 'stroke="#b4551f"' in out
+    assert 'fill="none"' in out
+
+
+def test_build_icon_variants_uses_dark_page(tmp_path):
+    from PIL import Image
+
+    light_page = tmp_path / "light.png"
+    dark_page = tmp_path / "dark.png"
+    Image.new("RGBA", (64, 64), (22, 22, 22, 255)).save(light_page)
+    Image.new("RGBA", (64, 64), (251, 249, 245, 255)).save(dark_page)
+    rows = brand_profile.build_icon_variants(
+        light_page,
+        tmp_path / "icons",
+        name="x",
+        sizes=[16],
+        backgrounds=["light", "dark"],
+        palette=PALETTE,
+        dark_page=dark_page,
+    )
+    dark = next(row for row in rows if row["background"] == "dark")
+    with Image.open(dark["path"]) as image:
+        assert image.convert("RGB").getpixel((8, 8))[0] > 200
 
 
 def test_hitl_auto_selection_skips_failed_and_picks_one_explore_candidate():

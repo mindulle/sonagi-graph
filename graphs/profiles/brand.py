@@ -1209,16 +1209,39 @@ def build_icon_variants(
     sizes: Sequence[int],
     backgrounds: Sequence[str],
     palette: Mapping[str, str],
+    dark_page: Optional[Path] = None,
+    crop: bool = False,
 ) -> List[Dict[str, Any]]:
-    """2000px 아트를 사이즈·배경 조합으로 줄인다(외부 프로세스 없이 결정론)."""
+    """2000px 아트를 사이즈·배경 조합으로 줄인다(외부 프로세스 없이 결정론).
+
+    `dark_page`가 있으면 dark 배경에는 그 아트를 쓴다(explore: ink → paper 반전).
+    `crop`은 아트보드 여백을 잘라 아이콘 타일을 마크에 꽉 채운다(explore 전용).
+    """
     from PIL import Image
 
     out_dir.mkdir(parents=True, exist_ok=True)
     rows: List[Dict[str, Any]] = []
-    with Image.open(page) as source:
-        art = source.convert("RGBA")
-        for background in backgrounds:
-            color = _background_color(palette, background)
+    for background in backgrounds:
+        source_page = (
+            Path(dark_page)
+            if background == "dark" and dark_page is not None
+            else Path(page)
+        )
+        color = _background_color(palette, background)
+        with Image.open(source_page) as source:
+            art = source.convert("RGBA")
+            if crop:
+                box = art.getchannel("A").getbbox()
+                if box:
+                    pad = round(max(box[2] - box[0], box[3] - box[1]) * 0.06)
+                    art = art.crop(
+                        (
+                            max(0, box[0] - pad),
+                            max(0, box[1] - pad),
+                            min(art.width, box[2] + pad),
+                            min(art.height, box[3] + pad),
+                        )
+                    )
             for size in sizes:
                 ratio = min(float(size) / art.width, float(size) / art.height)
                 box = (
@@ -2055,6 +2078,19 @@ class BrandProfile:
         jpg = pack_dir / "mark.jpg"
         ctx.jpeg(png, jpg, quality)
 
+        dark_svg: Optional[Path] = None
+        dark_png: Optional[Path] = None
+        if explore:
+            # dark 배경은 ink가 배경과 같아진다 — ink만 paper로 바꾼 변형을 쓴다.
+            dark_text = brand_marks.recolor_svg(
+                outlined.read_text(encoding="utf-8", errors="replace"),
+                {brand["palette"]["ink"]: brand["palette"]["paper"]},
+            )
+            dark_svg = pack_dir / "outlined-dark.svg"
+            dark_svg.write_text(dark_text, encoding="utf-8")
+            dark_png = pack_dir / f"mark-{width}-dark.png"
+            ctx.convert(dark_svg, dark_png, width, max_height)
+
         icons = build_icon_variants(
             png,
             icon_dir,
@@ -2062,10 +2098,14 @@ class BrandProfile:
             sizes=brand["sizes"],
             backgrounds=brand["backgrounds"],
             palette=brand["palette"],
+            dark_page=dark_png,
+            crop=explore,
         )
 
         artifacts: Dict[str, Any] = {}
         paths: List[Path] = [normalized, outlined, png, jpg]
+        if dark_svg is not None and dark_png is not None:
+            paths += [dark_svg, dark_png]
         if pdf.is_file():
             paths.append(pdf)
         if lockup:
@@ -2150,6 +2190,7 @@ class BrandProfile:
                         candidate_gate_rows
                     ),
                     "lockup": lockup_meta,
+                    "dark_variant": "outlined-dark.svg" if dark_svg else None,
                 }
             )
         meta_path = pack_dir / "meta.json"
