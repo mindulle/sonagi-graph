@@ -25,6 +25,7 @@ from graphs.llm import chat_model
 from graphs.profiles import base
 from graphs.profiles import board as board_module
 from graphs.profiles import contact_sheet as contact_sheet_module
+from graphs.profiles import diversity as diversity_module
 from graphs.profiles import presets
 
 #: 변주 상한. 24가 기본이고, 대량 탐색(GRAPH-32)은 120까지 허용한다.
@@ -37,7 +38,7 @@ CONTACT_THUMB_HEIGHT = 420
 
 DEFAULT_SPEC: Dict[str, Any] = {
     "platform": "generic",
-    "styles_per_direction": 2,
+    "styles_per_direction": None,
     "variant_cap": DEFAULT_VARIANT_CAP,
     "top_n": 9,
     "mockups": 3,
@@ -313,6 +314,17 @@ class WebProfile:
     ) -> List[Dict[str, Any]]:
         directions = ir.get("directions") or [fallback_direction(ir)]
         styles = list(styles)
+        cap, _ = clamp_variant_cap(spec.get("variant_cap"))
+        breakpoints = tuple(spec.get("breakpoints") or ("desktop",))
+        themes = tuple(spec.get("themes") or ("light",))
+        per_dir_limit = diversity_module.resolve_styles_per_direction(
+            cap,
+            len(directions),
+            combos_per_style=max(1, len(breakpoints) * len(themes)),
+            explicit=spec.get("styles_per_direction"),
+        )
+        # 중복·자산 반복 교체 시 대체 후보를 고를 수 있도록 여유 풀을 함께 계획한다.
+        pool_limit = min(len(styles), max(per_dir_limit, per_dir_limit * 2)) if styles else per_dir_limit
 
         per_direction: List[Dict[str, Any]] = []
         remaining = list(styles)
@@ -325,13 +337,13 @@ class WebProfile:
             plan = craft.plan_variants(
                 brief,
                 pool,
-                limit=int(spec.get("styles_per_direction", 2)),
-                breakpoints=tuple(spec.get("breakpoints") or ("desktop",)),
-                themes=tuple(spec.get("themes") or ("light",)),
+                limit=pool_limit,
+                breakpoints=breakpoints,
+                themes=themes,
                 seed=f"{spec.get('seed')}-{index}",
             )
-            used_names = {v["style"] for v in plan}
-            used_ids = {v["style_id"] for v in plan}
+            used_names = {v["style"] for v in plan[:per_dir_limit]}
+            used_ids = {v["style_id"] for v in plan[:per_dir_limit]}
             remaining = [
                 s
                 for s in remaining
@@ -343,18 +355,27 @@ class WebProfile:
                 variant["motifs"] = list(direction.get("motifs") or [])
                 per_direction.append(variant)
 
-        cap, _ = clamp_variant_cap(spec.get("variant_cap"))
-        seen = set()
-        variants = []
-        for variant in per_direction:
-            key = (variant["style"], variant["breakpoint"], variant["theme"])
-            if key in seen:
-                continue
-            seen.add(key)
-            variants.append(variant)
-            if len(variants) >= cap:
-                break
-        return variants
+        style_lookup: Dict[str, Mapping[str, Any]] = {}
+        for style in styles:
+            if style.get("id"):
+                style_lookup[str(style["id"])] = style
+            if style.get("name"):
+                style_lookup[str(style["name"])] = style
+
+        return diversity_module.select_diverse_variants(
+            per_direction,
+            cap=cap,
+            style_lookup=style_lookup,
+            min_distance=float(
+                spec.get(
+                    "min_feature_distance", diversity_module.DEFAULT_MIN_FEATURE_DISTANCE
+                )
+            ),
+            max_asset_reuse=int(
+                spec.get("max_asset_reuse", diversity_module.DEFAULT_MAX_ASSET_REUSE)
+            ),
+            asset_pool=spec.get("asset_pool"),
+        )
 
     def render(
         self, variant: Mapping[str, Any], ctx: base.ProfileContext
@@ -438,7 +459,11 @@ class WebProfile:
                     "png": str(png) if png.is_file() else None,
                     "style": render.get("style"),
                     "theme": render.get("theme"),
+                    "breakpoint": render.get("breakpoint"),
                     "direction": render.get("direction"),
+                    "axes": render.get("axes"),
+                    "asset": render.get("asset"),
+                    "motifs": render.get("motifs"),
                 }
             )
 

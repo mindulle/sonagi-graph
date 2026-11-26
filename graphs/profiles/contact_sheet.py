@@ -29,9 +29,10 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from graphs.profiles import board as board_module
+from graphs.profiles import diversity as diversity_module
 
 #: 고정 격자. 6열이면 디스코드 미리보기에서도 한눈에 비교하기 좋다.
 COLUMNS = 6
@@ -185,6 +186,7 @@ def compose(
     brief: str = "",
     columns: int = COLUMNS,
     title: str = "CONTACT SHEET",
+    diversity: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """렌더 목록 → 콘택트 시트 PNG. 고정 레이아웃이라 바이트가 재현된다."""
     from PIL import Image, ImageDraw
@@ -205,12 +207,24 @@ def compose(
 
     # --- 제목 블록 -------------------------------------------------------
     draw.text((MARGIN, MARGIN), title, font=title_font, fill=ACCENT)
+    diversity_info = (
+        dict(diversity)
+        if diversity is not None
+        else diversity_module.diversity_summary(items)
+    )
+    diversity_label = (
+        f"diversity {diversity_info.get('diversity_score', 100)}% "
+        f"(dup {diversity_info.get('duplicate_groups', 0)})"
+        if items
+        else ""
+    )
     meta_line = " · ".join(
         part
         for part in (
             f"run {truncate_text(run_id, 40)}" if run_id else "",
             f"seed {truncate_text(seed, 24)}" if seed else "",
             f"{len(items)} items",
+            diversity_label,
         )
         if part
     )
@@ -301,6 +315,7 @@ def compose(
         "seed": seed,
         "font": primary,
         "font_fallback": fallback,
+        "diversity": diversity_info,
     }
 
 
