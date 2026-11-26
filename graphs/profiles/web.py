@@ -323,9 +323,6 @@ class WebProfile:
             combos_per_style=max(1, len(breakpoints) * len(themes)),
             explicit=spec.get("styles_per_direction"),
         )
-        # 중복·자산 반복 교체 시 대체 후보를 고를 수 있도록 여유 풀을 함께 계획한다.
-        pool_limit = min(len(styles), max(per_dir_limit, per_dir_limit * 2)) if styles else per_dir_limit
-
         per_direction: List[Dict[str, Any]] = []
         remaining = list(styles)
         for index, direction in enumerate(directions):
@@ -337,13 +334,13 @@ class WebProfile:
             plan = craft.plan_variants(
                 brief,
                 pool,
-                limit=pool_limit,
+                limit=per_dir_limit,
                 breakpoints=breakpoints,
                 themes=themes,
                 seed=f"{spec.get('seed')}-{index}",
             )
-            used_names = {v["style"] for v in plan[:per_dir_limit]}
-            used_ids = {v["style_id"] for v in plan[:per_dir_limit]}
+            used_names = {v["style"] for v in plan}
+            used_ids = {v["style_id"] for v in plan}
             remaining = [
                 s
                 for s in remaining
@@ -354,6 +351,21 @@ class WebProfile:
                 variant["direction_index"] = index
                 variant["motifs"] = list(direction.get("motifs") or [])
                 per_direction.append(variant)
+
+        # 중복·자산 반복으로 빠진 자리에 넣을 대체 후보(아직 배정되지 않은 나머지 스타일)
+        replacements: List[Dict[str, Any]] = []
+        if remaining:
+            extra_brief = dict(ir)
+            extra_brief["purpose"] = direction_text(directions[0])
+            extra_brief["tones"] = list(ir.get("tones") or ["편집"])
+            replacements = craft.plan_variants(
+                extra_brief,
+                remaining,
+                limit=len(remaining),
+                breakpoints=breakpoints,
+                themes=themes,
+                seed=f"{spec.get('seed')}-extra",
+            )
 
         style_lookup: Dict[str, Mapping[str, Any]] = {}
         for style in styles:
@@ -375,6 +387,7 @@ class WebProfile:
                 spec.get("max_asset_reuse", diversity_module.DEFAULT_MAX_ASSET_REUSE)
             ),
             asset_pool=spec.get("asset_pool"),
+            replacements=replacements,
         )
 
     def render(

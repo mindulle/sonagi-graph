@@ -161,12 +161,13 @@ def select_diverse_variants(
     min_distance: float = DEFAULT_MIN_FEATURE_DISTANCE,
     max_asset_reuse: int = DEFAULT_MAX_ASSET_REUSE,
     asset_pool: Optional[Sequence[str]] = None,
+    replacements: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """쌍별 특징 거리와 자산 반복 상한을 적용해 다양한 후보를 고른다.
 
     최소 거리 미달이거나 같은 자산이 `max_asset_reuse` 이상 쓰인 후보는
-    풀의 다음 후보로 교체한다. 풀이 소진되어 `cap`에 못 미치면 보류 목록에서
-    기존 선택과 가장 거리가 먼 순으로 채운다.
+    대체 후보 풀(`replacements` 또는 뒤쪽 후보)에서 기준을 만족하는 후보로 교체한다.
+    기준을 만족하는 대체 후보가 없으면 원래 순서를 유지해 방향 균형을 지킨다.
     """
     cap = max(0, int(cap))
     if cap == 0 or not candidates:
@@ -175,42 +176,80 @@ def select_diverse_variants(
     lookup = style_lookup or {}
     pool_assets = [str(a) for a in (asset_pool or ()) if str(a).strip()]
 
-    selected: List[Dict[str, Any]] = []
-    selected_vecs: List[Dict[str, Any]] = []
-    selected_keys = set()
-    asset_counts: Counter = Counter()
-    deferred: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
-
-    for raw in candidates:
+    def _prepare(raw: Mapping[str, Any]) -> Tuple[Dict[str, Any], Optional[Mapping[str, Any]]]:
         cand = dict(raw)
-        key = (cand.get("style"), cand.get("breakpoint"), cand.get("theme"))
-        if key in selected_keys:
-            continue
-
         style_meta = lookup.get(str(cand.get("style_id") or "")) or lookup.get(
             str(cand.get("style") or "")
         )
-        # 스타일 메타의 axes/asset 정보를 보존해 후속 단계(콘택트 시트 등)에서도 참조 가능하게 한다.
         if style_meta and "axes" not in cand and isinstance(style_meta.get("axes"), Mapping):
             cand["axes"] = dict(style_meta["axes"])
+        return cand, style_meta
 
+    def _passes(
+        cand: Dict[str, Any],
+        style_meta: Optional[Mapping[str, Any]],
+        selected_vecs: Sequence[Dict[str, Any]],
+        asset_counts: Counter,
+    ) -> Tuple[bool, Dict[str, Any], str]:
         asset_key = extract_asset_key(cand, style_meta)
         if asset_key and max_asset_reuse > 0 and asset_counts[asset_key] >= max_asset_reuse:
-            replacement = _pick_replacement_asset(pool_assets, asset_counts, max_asset_reuse)
-            if replacement:
-                cand["asset"] = replacement
-                asset_key = replacement
+            replacement_asset = _pick_replacement_asset(
+                pool_assets, asset_counts, max_asset_reuse
+            )
+            if replacement_asset:
+                cand["asset"] = replacement_asset
+                asset_key = replacement_asset
             else:
-                vec = variant_feature_vector(cand, style_meta)
-                deferred.append((cand, vec))
-                continue
-
+                return False, variant_feature_vector(cand, style_meta), asset_key
         vec = variant_feature_vector(cand, style_meta)
         if selected_vecs and min_distance > 0:
             nearest = min(feature_distance(vec, sv) for sv in selected_vecs)
             if nearest < min_distance:
-                deferred.append((cand, vec))
-                continue
+                return False, vec, asset_key
+        return True, vec, asset_key
+
+    selected: List[Dict[str, Any]] = []
+    selected_vecs: List[Dict[str, Any]] = []
+    selected_keys = set()
+    asset_counts: Counter = Counter()
+    deferred: List[Tuple[Dict[str, Any], Dict[str, Any], str]] = []
+    extra_pool = list(replacements or ())
+
+    for raw in candidates:
+        cand, style_meta = _prepare(raw)
+        key = (cand.get("style"), cand.get("breakpoint"), cand.get("theme"))
+        if key in selected_keys:
+            continue
+
+        ok, vec, asset_key = _passes(cand, style_meta, selected_vecs, asset_counts)
+        if not ok:
+            # 대체 후보 풀에서 조건을 만족하는 첫 후보를 찾는다.
+            replaced = False
+            for r_idx, r_raw in enumerate(extra_pool):
+                r_cand, r_meta = _prepare(r_raw)
+                r_key = (r_cand.get("style"), r_cand.get("breakpoint"), r_cand.get("theme"))
+                if r_key in selected_keys:
+                    continue
+                r_ok, r_vec, r_asset = _passes(r_cand, r_meta, selected_vecs, asset_counts)
+                if r_ok:
+                    if "direction" in cand and "direction" not in r_cand:
+                        r_cand["direction"] = cand["direction"]
+                    if "direction_index" in cand and "direction_index" not in r_cand:
+                        r_cand["direction_index"] = cand["direction_index"]
+                    if r_asset:
+                        r_cand.setdefault("asset", r_asset)
+                        asset_counts[r_asset] += 1
+                    selected.append(r_cand)
+                    selected_vecs.append(r_vec)
+                    selected_keys.add(r_key)
+                    extra_pool.pop(r_idx)
+                    replaced = True
+                    break
+            if not replaced:
+                deferred.append((cand, vec, asset_key))
+            if len(selected) >= cap:
+                return selected
+            continue
 
         if asset_key:
             cand.setdefault("asset", asset_key)
@@ -221,35 +260,20 @@ def select_diverse_variants(
         if len(selected) >= cap:
             return selected
 
-    # 풀이 부족해 cap에 못 미치면 보류 후보 중 기존 선택과 가장 거리가 먼 순으로 채운다.
-    while len(selected) < cap and deferred:
-        best_idx = 0
-        best_rank = (-1.0, 0)
-        for idx, (cand, vec) in enumerate(deferred):
-            key = (cand.get("style"), cand.get("breakpoint"), cand.get("theme"))
-            if key in selected_keys:
-                continue
-            nearest = (
-                min(feature_distance(vec, sv) for sv in selected_vecs)
-                if selected_vecs
-                else 1.0
-            )
-            asset_key = vec.get("asset", "")
-            reuse_penalty = -asset_counts[asset_key] if asset_key else 0
-            rank = (nearest, reuse_penalty)
-            if rank > best_rank:
-                best_rank = rank
-                best_idx = idx
-        cand, vec = deferred.pop(best_idx)
+    # 기준을 만족하는 대체 후보가 없었을 때는 원래 순서대로 보류 후보를 채워 방향 균형을 유지한다.
+    for cand, vec, asset_key in deferred:
+        if len(selected) >= cap:
+            break
         key = (cand.get("style"), cand.get("breakpoint"), cand.get("theme"))
         if key in selected_keys:
             continue
-        asset_key = vec.get("asset", "")
         if asset_key and max_asset_reuse > 0 and asset_counts[asset_key] >= max_asset_reuse:
-            replacement = _pick_replacement_asset(pool_assets, asset_counts, max_asset_reuse)
-            if replacement:
-                cand["asset"] = replacement
-                asset_key = replacement
+            replacement_asset = _pick_replacement_asset(
+                pool_assets, asset_counts, max_asset_reuse
+            )
+            if replacement_asset:
+                cand["asset"] = replacement_asset
+                asset_key = replacement_asset
         if asset_key:
             cand.setdefault("asset", asset_key)
             asset_counts[asset_key] += 1
