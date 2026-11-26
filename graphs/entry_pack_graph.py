@@ -57,6 +57,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 import urllib.parse
 import urllib.request
 import uuid
@@ -106,6 +107,8 @@ class EntryState(TypedDict, total=False):
     variants: List[Dict[str, Any]]
     recipe: Optional[str]
     renders: List[Dict[str, Any]]
+    contact_sheet: Optional[str]
+    timings: Dict[str, float]
     critiques: List[Dict[str, Any]]
     options: List[Dict[str, Any]]
     selection: List[str]
@@ -345,17 +348,39 @@ def render_node(state: EntryState) -> Dict[str, Any]:
     ctx.extra["content"] = state.get("content") or state.get("brief") or ""
     profile = profiles_base.profile_for_spec(spec)
 
+    render_started = time.perf_counter()
     renders = []
     for variant in variants:
         rendered = profile.render(variant, ctx)
         if rendered:
             renders.append(rendered)
+    render_seconds = round(time.perf_counter() - render_started, 3)
+
+    # HITL 전에 전 변주를 한 장으로 모은다(GRAPH-32). 실패해도 선택지는 그대로
+    # 남겨야 하므로 시트 생성 실패는 실행을 막지 않는다.
+    contact_sheet_row: Optional[Dict[str, Any]] = None
+    contact_seconds = 0.0
+    sheet_hook = getattr(profile, "contact_sheet", None)
+    if renders and callable(sheet_hook):
+        sheet_started = time.perf_counter()
+        try:
+            contact_sheet_row = sheet_hook(
+                renders, spec, {**state, "renders": renders}, ctx
+            )
+        except Exception as exc:  # noqa: BLE001 - 시트는 보조 산출물이다
+            print(
+                f"[entry_pack] 경고: 콘택트 시트 생성 실패 — {str(exc)[:200]}",
+                file=sys.stderr,
+            )
+        contact_seconds = round(time.perf_counter() - sheet_started, 3)
 
     render_paths: List[Any] = []
     for render in renders:
         render_paths.append(render["svg"])
         if render.get("manifest"):
             render_paths.append(render["manifest"])
+    if contact_sheet_row:
+        render_paths.append(contact_sheet_row.get("path"))
     manifest = _build_manifest(
         {**state, "renders": renders},
         run_dir,
@@ -367,6 +392,11 @@ def render_node(state: EntryState) -> Dict[str, Any]:
     return {
         "recipe": ctx.extra.get("recipe"),
         "renders": renders,
+        "contact_sheet": (contact_sheet_row or {}).get("path"),
+        "timings": {
+            "render_seconds": render_seconds,
+            "contact_sheet_seconds": contact_seconds,
+        },
         "manifest": str(manifest_path),
         "manifest_digest": core_artifacts.manifest_digest(manifest),
         "status": "rendered",
