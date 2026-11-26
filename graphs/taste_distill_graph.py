@@ -19,6 +19,8 @@ from langgraph.graph import END, START, StateGraph
 
 from graphs.taste import distill as taste_distill
 from graphs.taste import ledger as taste_ledger
+from graphs.taste import asset_prefs as taste_asset_prefs
+from graphs.taste import gallery as taste_gallery
 from graphs.taste import profile as taste_profile
 
 WIKI_TASTE_DIR_ENV = "SONAGI_WIKI_TASTE_DIR"
@@ -40,6 +42,9 @@ class TasteDistillState(TypedDict, total=False):
     approved_overrides: Dict[str, Any]
     applied_profile_path: str
     applied_note_path: str
+    applied_asset_prefs_path: str
+    applied_gallery_html: str
+    applied_gallery_png: str
     status: str
 
 
@@ -126,9 +131,28 @@ def apply_node(state: TasteDistillState) -> Dict[str, Any]:
     tmp_note.write_text(note_text, encoding="utf-8")
     os.replace(tmp_note, note_path)
 
+    records = state.get("decisions") or []
+    ap_path = ppath.parent / taste_asset_prefs.ASSET_PREFS_NAME
+    prefs = taste_asset_prefs.build_asset_prefs(records)
+    taste_asset_prefs.save_asset_prefs(prefs, ap_path)
+
+    gallery_html = ""
+    gallery_png = ""
+    try:
+        gal = taste_gallery.build_monthly_gallery(
+            records, out_dir=wiki_dir, month=month, prefs=prefs
+        )
+        gallery_html = gal["html_path"]
+        gallery_png = gal["png_path"]
+    except ImportError:
+        pass
+
     return {
         "applied_profile_path": str(ppath),
         "applied_note_path": str(note_path),
+        "applied_asset_prefs_path": str(ap_path),
+        "applied_gallery_html": gallery_html,
+        "applied_gallery_png": gallery_png,
         "status": "applied",
     }
 
