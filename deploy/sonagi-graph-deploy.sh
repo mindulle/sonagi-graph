@@ -38,6 +38,16 @@ LOG_MAX_BYTES="${SONAGI_GRAPH_LOG_MAX_BYTES:-5242880}"
 MIN_FREE_KB="${SONAGI_GRAPH_MIN_FREE_KB:-2097152}"
 PRUNE_KEEP="${SONAGI_GRAPH_PRUNE_KEEP:-3}"
 
+# systemd가 아닌 수동 실행(`sudo -u ubuntu ...`)은 secure_path를 써서
+# ~/.local/bin(langgraph CLI)이 PATH에 없다. 있으면 앞에 붙인다.
+if [ -n "${HOME:-}" ] && [ -d "$HOME/.local/bin" ]; then
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) PATH="$HOME/.local/bin:$PATH" ;;
+  esac
+fi
+export PATH
+
 usage() {
   cat <<'EOF'
 사용법: sonagi-graph-deploy.sh [--check|--force|--rollback]
@@ -184,14 +194,31 @@ image_ref_for_tag() {
   printf '%s:sha-%s' "$IMAGE" "${1#image-}"
 }
 
+# 로드한 이미지가 이 호스트에서 실행 가능한 아키텍처인지 확인한다.
+# (CI가 amd64를 만들고 호스트가 arm64라서 한 번 서비스가 내려간 적이 있다.)
+verify_arch() {
+  local ref="$1" host_arch="" image_arch=""
+  host_arch="$("$DOCKER" version --format '{{.Server.Arch}}' 2>/dev/null || true)"
+  image_arch="$("$DOCKER" image inspect --format '{{.Architecture}}' "$ref" 2>/dev/null || true)"
+  if [ -n "$host_arch" ] && [ -n "$image_arch" ] && [ "$host_arch" != "$image_arch" ]; then
+    log "아키텍처 불일치: 호스트 $host_arch, 이미지 $image_arch ($ref)"
+    return 1
+  fi
+  return 0
+}
+
 # 릴리스 태그의 로컬 이미지 ref를 stdout으로 출력한다. 없으면 릴리스 자산을
 # 내려받아 zstd 해제 + docker load까지 한다. 로그는 전부 stderr로 간다.
 ensure_image() {
   local tag="$1" ref="" size="" need_kb="" avail_kb="" tmp=""
   ref="$(image_ref_for_tag "$tag")"
   if "$DOCKER" image inspect "$ref" >/dev/null 2>&1; then
-    printf '%s' "$ref"
-    return 0
+    if verify_arch "$ref"; then
+      printf '%s' "$ref"
+      return 0
+    fi
+    log "로컬 이미지 아키텍처가 맞지 않아 릴리스 자산으로 다시 받습니다."
+    "$DOCKER" image rm "$ref" >/dev/null 2>&1 || true
   fi
 
   size="$(release_asset_size "$tag")" || {
@@ -232,6 +259,9 @@ ensure_image() {
 
   if ! "$DOCKER" image inspect "$ref" >/dev/null 2>&1; then
     log "로드 후 이미지 ref를 찾지 못했습니다: $ref"
+    return 1
+  fi
+  if ! verify_arch "$ref"; then
     return 1
   fi
   printf '%s' "$ref"
@@ -363,6 +393,16 @@ if ! IMAGE_REF="$(ensure_image "$DEPLOY_TAG")"; then
 fi
 DIGEST="$("$DOCKER" image inspect --format '{{.Id}}' "$IMAGE_REF")"
 
+# 첫 릴리스 배포라 상태에 이전 태그가 없을 때를 대비해, 지금 실행 중인
+# 컨테이너의 이미지를 복구 후보로 기억한다. (아키텍처 사고의 재발 방지)
+BASELINE_REF=""
+if [ -z "$("$PYTHON" "$STATE_HELPER" get --state "$STATE_FILE" --field tag)" ]; then
+  BASELINE_REF="$("$DOCKER" inspect sonagi-graph-langgraph-api-1 --format '{{.Config.Image}}' 2>/dev/null || true)"
+  if [ "$BASELINE_REF" = "$IMAGE_REF" ]; then
+    BASELINE_REF=""
+  fi
+fi
+
 if deploy_and_verify "$IMAGE_REF"; then
   "$PYTHON" "$STATE_HELPER" success \
     --state "$STATE_FILE" --tag "$DEPLOY_TAG" --image-ref "$IMAGE_REF" --digest "$DIGEST"
@@ -391,6 +431,13 @@ if [ -n "$ROLLBACK_TAG" ] && [ "$ROLLBACK_TAG" != "$DEPLOY_TAG" ]; then
     log "롤백 성공: $ROLLBACK_TAG (상태 파일은 그대로)"
   else
     log "롤백도 실패했습니다. 수동 개입이 필요합니다."
+  fi
+elif [ -n "$BASELINE_REF" ]; then
+  log "상태에 이전 릴리스가 없어 배포 전 이미지로 복구: $BASELINE_REF"
+  if deploy_and_verify "$BASELINE_REF"; then
+    log "복구 성공: $BASELINE_REF (상태 파일은 비어 있음)"
+  else
+    log "복구도 실패했습니다. 수동 개입이 필요합니다."
   fi
 else
   log "롤백할 이전 릴리스가 없습니다."

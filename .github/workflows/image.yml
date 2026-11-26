@@ -50,6 +50,13 @@ jobs:
           fi
           zstd --version
 
+      # 배포 호스트가 arm64(aarch64)다. amd64 이미지를 만들면 compose가
+      # platform mismatch로 거부하고 API 컨테이너가 내려간다.
+      - name: Set up QEMU for arm64
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Build image
         id: build
         run: |
@@ -62,8 +69,9 @@ jobs:
 
           # `langgraph build -t`는 click 옵션이 multiple이 아니라 마지막 값만 남는다.
           # sha 태그로 한 번 빌드하고, stable은 docker tag로 붙인다.
+          # `--` 뒤 인자는 docker build로 그대로 전달된다.
           SECONDS=0
-          langgraph build -t "${IMAGE}:sha-${SHORT}"
+          langgraph build -t "${IMAGE}:sha-${SHORT}" -- --platform linux/arm64
           docker tag "${IMAGE}:sha-${SHORT}" "${IMAGE}:stable"
           echo "build_seconds=${SECONDS}" >> "$GITHUB_OUTPUT"
 
@@ -73,6 +81,12 @@ jobs:
           set -euo pipefail
           IMAGE='${{ steps.build.outputs.image }}'
           SHORT='${{ steps.build.outputs.short }}'
+          ARCH="$(docker image inspect --format '{{.Architecture}}' "${IMAGE}:sha-${SHORT}")"
+          if [ "$ARCH" != "arm64" ]; then
+            echo "::error::expected arm64 image, got ${ARCH}"
+            exit 1
+          fi
+          echo "arch=${ARCH}" >> "$GITHUB_OUTPUT"
           SECONDS=0
           docker save "${IMAGE}:sha-${SHORT}" | zstd -T0 -3 > graph-image.tar.zst
           SIZE_BYTES="$(stat -c %s graph-image.tar.zst)"
@@ -150,6 +164,7 @@ jobs:
           SHORT: ${{ steps.build.outputs.short }}
           SIZE_MB: ${{ steps.package.outputs.size_mb }}
           SIZE_BYTES: ${{ steps.package.outputs.size_bytes }}
+          ARCH: ${{ steps.package.outputs.arch }}
           PACKAGE_SECONDS: ${{ steps.package.outputs.package_seconds }}
           BUILD_SECONDS: ${{ steps.build.outputs.build_seconds }}
           GHCR_OUTCOME: ${{ steps.ghcr-login.outcome }}
@@ -163,6 +178,7 @@ jobs:
             echo "| commit | \`${GITHUB_SHA}\` |"
             echo "| release tag | \`${RELEASE_TAG:-image-${SHORT}}\` |"
             echo "| asset | \`graph-image.tar.zst\` (${SIZE_MB:-?} MiB / ${SIZE_BYTES:-?} bytes) |"
+            echo "| arch | \`${ARCH:-?}\` |"
             echo "| build | ${BUILD_SECONDS:-?}s |"
             echo "| package (save+zstd) | ${PACKAGE_SECONDS:-?}s |"
             echo "| GHCR mirror | ${GHCR_OUTCOME:-skipped} |"
