@@ -33,7 +33,9 @@ spec 예::
         "barcode": "8801234567890",
         "colors": {"ink": "#161616", "paper": "#fbf9f5",
                    "accent": "#b4551f", "calm": "#1f4536"},
-        "mark_path": "/path/mark.svg"
+        "mark_path": "/path/mark.svg",
+        "motif": "auto",             # auto(기본) | none — 중간 밴드 모티프
+        "notes": ["우아한 향", "차분한 하루"]  # 선택: 모티프 대신 놓는 짧은 문구(최대 3줄)
       }
     }
 
@@ -55,6 +57,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -73,6 +76,16 @@ PACKAGE_TYPES = ("label", "pouch")
 BLEED_MM = 3.0
 SAFE_PAD_MM = 6.0
 MARK_SIZE_MM = 14.0
+
+#: 중간 밴드 모티프/노트 — 재료 블록과 바코드 조용영역 사이의 빈 자리.
+#: 모든 값은 mm·px 상수라 난수·시각이 끼어들지 않는다(결정론).
+MOTIF_GAP_MM = 4.0
+MOTIF_MIN_MM = 18.0
+MOTIF_WIDTH_RANGE = (0.38, 0.45)
+MOTIF_MODES = ("auto", "none")
+NOTES_FONT_PX = 9.0
+NOTES_LINE_PX = 12.0
+NOTES_MAX_LINES = 3
 
 DEFAULT_SPEC: Dict[str, Any] = {
     "image_width": 2000,
@@ -173,6 +186,49 @@ def _slug(value: str) -> str:
     return "brand-" + hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()[:6]
 
 
+def _motif_mode(value: Any) -> str:
+    """`package.motif`를 `auto|none`으로 정규화한다. 기본은 auto다.
+
+    `False`는 none, `True`는 auto로 받아 준다(spec JSON에서 불리언을 쓰는 경우).
+    그 밖의 값은 조용히 auto로 바꾸지 않고 실행 전에 멈춘다.
+    """
+    if value is None:
+        return "auto"
+    if isinstance(value, bool):
+        return "auto" if value else "none"
+    mode = str(value).strip().lower()
+    if mode not in MOTIF_MODES:
+        raise base.ProfileError(
+            f"print profile: package.motif는 {'|'.join(MOTIF_MODES)} 중 하나다 — {value!r}"
+        )
+    return mode
+
+
+def _notes_spec(value: Any) -> List[str]:
+    """`package.notes`를 줄 목록으로 정규화한다(문자열 또는 문자열 목록).
+
+    빈 줄은 버린다. 세 줄을 넘는 입력은 렌더 단계에서 줄임표로 자르고 그 사실을
+    라벨 manifest에 남긴다 — 검증 단계에서는 원문을 보존한다.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw = value.splitlines()
+    elif isinstance(value, (list, tuple)):
+        raw = []
+        for item in value:
+            if not isinstance(item, str):
+                raise base.ProfileError(
+                    f"print profile: package.notes는 문자열 또는 문자열 목록이어야 한다 — {item!r}"
+                )
+            raw.extend(item.splitlines())
+    else:
+        raise base.ProfileError(
+            f"print profile: package.notes는 문자열 또는 문자열 목록이어야 한다 — {value!r}"
+        )
+    return [line.strip() for line in raw if line.strip()]
+
+
 def package_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
     """`spec['package']`를 검증·정규화한다. 누락은 실행 전에 멈춘다."""
     package = spec.get("package")
@@ -216,6 +272,12 @@ def package_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
     normalized["size_mm"] = [width, height]
     normalized["colors"] = {**DEFAULT_COLORS, **(package.get("colors") or {})}
     normalized.setdefault("barcode", "8800000000000")
+    normalized["motif"] = _motif_mode(package.get("motif"))
+    notes = _notes_spec(package.get("notes"))
+    if notes:
+        normalized["notes"] = notes
+    else:
+        normalized.pop("notes", None)
 
     # 바코드 조용영역과 안전 여백이 들어갈 최소 크기. 모자라면 전개도가 음수 좌표로
     # 나가므로 렌더 전에 멈춘다(작은 사이즈는 실제 라벨에서도 읽을 수 없다).
@@ -521,6 +583,237 @@ def _inject_mark(svg_text: str, package: Mapping[str, Any], width_px: float) -> 
     return svg_text[:close] + tag + svg_text[close:]
 
 
+# ---------------------------------------------------------------------------
+# 중간 밴드 — 재료와 바코드 사이의 빈 자리 (GRAPH-31)
+# ---------------------------------------------------------------------------
+
+
+def _tag_number(tag: str, name: str) -> Optional[float]:
+    """SVG 태그 문자열에서 숫자 속성을 읽는다(없거나 숫자가 아니면 None)."""
+    match = re.search(rf'\b{re.escape(name)}="(-?[\d.]+)"', tag)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _middle_occupied_band(
+    svg_text: str, height_px: float, pad: float
+) -> Tuple[float, float]:
+    """아트가 실제로 차지한 위·아래 경계를 SVG에서 다시 읽는다.
+
+    위 경계는 바코드 위쪽 텍스트(브랜드·상품·재료·출처)의 마지막 기준선과
+    마크 하단 중 더 낮은 쪽이다. 아래 경계는 `barcode-quiet` rect의 상단이다.
+    좌표를 하드코딩하지 않으므로 재료 줄 수·마크 유무가 바뀌어도 겹치지 않는다.
+    """
+    bottom = height_px - pad
+    quiet = re.search(
+        r'<rect\b[^>]*\bid="barcode-quiet"[^>]*>', svg_text, re.IGNORECASE
+    )
+    if quiet:
+        quiet_y = _tag_number(quiet.group(0), "y")
+        if quiet_y is not None:
+            bottom = quiet_y
+
+    top = pad
+    for tag in re.findall(r"<text\b[^>]*>", svg_text, re.IGNORECASE):
+        y = _tag_number(tag, "y")
+        if y is None or y >= bottom:
+            # 바코드 숫자는 조용영역 안/아래에 있다 — 중간 밴드 계산에서 뺀다.
+            continue
+        size = _tag_number(tag, "font-size") or 8.0
+        top = max(top, y + size * 0.25)
+
+    mark = re.search(r'<image\b[^>]*\bid="mark"[^>]*>', svg_text, re.IGNORECASE)
+    if mark:
+        mark_y = _tag_number(mark.group(0), "y") or 0.0
+        mark_h = _tag_number(mark.group(0), "height") or 0.0
+        top = max(top, mark_y + mark_h)
+    return top, bottom
+
+
+def _middle_band(top: float, bottom: float) -> Tuple[float, float]:
+    """점유 경계에서 여백을 뺀 실제 그리기 밴드."""
+    gap = MOTIF_GAP_MM * MM
+    return top + gap, bottom - gap
+
+
+def _ellipsize(text: str, size_px: float, max_width: float) -> str:
+    """한 줄을 폭에 맞게 줄임표로 자른다(줄임표 자체도 폭 계산에 넣는다)."""
+    suffix = " …"
+    if _text_width(text + suffix, size_px) <= max_width:
+        return text + suffix
+    trimmed = text
+    while trimmed and _text_width(trimmed + "…", size_px) > max_width:
+        trimmed = trimmed[:-1]
+    return f"{trimmed}…" if trimmed else "…"
+
+
+def _notes_lines(
+    package: Mapping[str, Any], width_px: float
+) -> Tuple[List[str], bool, int]:
+    """notes를 밴드 폭에 맞게 접고 최대 3줄로 자른다.
+
+    반환: (줄 목록, 잘렸는지, 버린 줄 수). 넘친 줄이 있으면 마지막 줄 끝에
+    줄임표를 붙여 잘림을 눈으로 알 수 있게 한다.
+    """
+    pad = SAFE_PAD_MM * MM
+    max_width = max(width_px - 2 * pad - 4 * MM, NOTES_FONT_PX)
+    lines: List[str] = []
+    for entry in package.get("notes") or []:
+        lines.extend(wrap_text(str(entry), NOTES_FONT_PX, max_width))
+    lines = [line for line in lines if line.strip()]
+    dropped = max(0, len(lines) - NOTES_MAX_LINES)
+    if dropped:
+        lines = lines[:NOTES_MAX_LINES]
+        lines[-1] = _ellipsize(lines[-1], NOTES_FONT_PX, max_width)
+    return lines, bool(dropped), dropped
+
+
+def _notes_fragment(
+    package: Mapping[str, Any], width_px: float, top: float, bottom: float
+) -> Tuple[str, Dict[str, Any]]:
+    """중간 밴드 가운데에 노트 줄을 그린다(작은 크기·잉크 0.75 불투명도)."""
+    band_top, band_bottom = _middle_band(top, bottom)
+    lines, truncated, dropped = _notes_lines(package, width_px)
+    info: Dict[str, Any] = {
+        "mode": "notes",
+        "lines": list(lines),
+        "truncated": truncated,
+        "dropped": dropped,
+        "band_px": [round(band_top, 1), round(band_bottom, 1)],
+    }
+    if not lines:
+        return "", info
+    block_h = (len(lines) - 1) * NOTES_LINE_PX
+    if band_bottom - band_top < block_h + NOTES_FONT_PX:
+        info["skipped"] = "중간 밴드가 노트 줄보다 좁다"
+        return "", info
+
+    colors = package.get("colors") or DEFAULT_COLORS
+    ink = colors.get("ink", DEFAULT_COLORS["ink"])
+    cx = width_px / 2
+    cy = (band_top + band_bottom) / 2
+    y = cy - block_h / 2 + NOTES_FONT_PX * 0.36
+    parts = ['<g id="notes">']
+    for line in lines:
+        parts.append(
+            f'<text x="{cx:.1f}" y="{y:.1f}" font-family="monospace" '
+            f'font-size="{_number(NOTES_FONT_PX)}" text-anchor="middle" '
+            f'fill="{_attr(ink)}" fill-opacity="0.75">{_text(line)}</text>'
+        )
+        y += NOTES_LINE_PX
+    parts.append("</g>")
+    return "".join(parts), info
+
+
+def _motif_fragment(
+    package: Mapping[str, Any], width_px: float, top: float, bottom: float
+) -> Tuple[str, Dict[str, Any]]:
+    """브랜드 문자열 해시로만 정해지는 동심원 모티프를 그린다.
+
+    링 개수(2~3)·크기(라벨 폭의 38~45%)·강조 점의 각도는 모두 해시 바이트에서
+    나온다. 난수·시각·폰트가 없으므로 같은 입력은 항상 같은 SVG 바이트가 된다.
+    """
+    digest = hashlib.sha256(str(package.get("brand") or "").encode("utf-8")).digest()
+    band_top, band_bottom = _middle_band(top, bottom)
+    band_h = band_bottom - band_top
+    info: Dict[str, Any] = {
+        "mode": "motif",
+        "seed": digest[:8].hex(),
+        "band_px": [round(band_top, 1), round(band_bottom, 1)],
+    }
+    if band_h < MOTIF_MIN_MM * MM:
+        info["skipped"] = f"중간 밴드가 {band_h / MM:.1f}mm로 너무 좁다"
+        return "", info
+
+    pad = SAFE_PAD_MM * MM
+    ratio = MOTIF_WIDTH_RANGE[0] + (digest[1] % 8) / 100.0
+    diameter = min(width_px * ratio, width_px - 2 * pad, band_h)
+    rings = 2 + digest[0] % 2
+    factors = [1.0, 0.74, 0.48][:rings]
+    cx = width_px / 2
+    cy = (band_top + band_bottom) / 2
+
+    colors = package.get("colors") or DEFAULT_COLORS
+    calm = colors.get("calm", DEFAULT_COLORS["calm"])
+    accent = colors.get("accent", DEFAULT_COLORS["accent"])
+    # 바깥은 차분한 색, 가운데는 강조색 — 인쇄에서 잉크가 튀지 않게 낮은 불투명도.
+    palette = [
+        (calm, 0.30, 1.4),
+        (accent, 0.28, 1.1),
+        (calm, 0.22, 1.0),
+    ]
+
+    parts = ['<g id="motif" fill="none">']
+    for factor, (color, opacity, stroke_width) in zip(factors, palette):
+        parts.append(
+            f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{diameter * factor / 2:.1f}" '
+            f'stroke="{_attr(color)}" stroke-width="{stroke_width:.1f}" '
+            f'stroke-opacity="{opacity:.2f}"/>'
+        )
+
+    # 강조 점은 가운데 링 안쪽, 해시로 정한 각도에 놓는다. 링 밖으로 나가지 않는다.
+    angle = (digest[2] / 255.0) * 2 * math.pi
+    dot_r = max(2.0, diameter * 0.035)
+    dot_orbit = max(diameter * 0.18, diameter * 0.74 / 2 - dot_r * 1.6)
+    dot_x = cx + dot_orbit * math.cos(angle)
+    dot_y = cy + dot_orbit * math.sin(angle)
+    parts.append(
+        f'<circle cx="{dot_x:.1f}" cy="{dot_y:.1f}" r="{dot_r:.1f}" '
+        f'fill="{_attr(accent)}" fill-opacity="0.55"/>'
+    )
+    parts.append("</g>")
+
+    info.update(
+        {
+            "rings": rings,
+            "diameter_px": round(diameter, 1),
+            "diameter_ratio": round(diameter / width_px, 3),
+            "center_px": [round(cx, 1), round(cy, 1)],
+        }
+    )
+    return "".join(parts), info
+
+
+def _middle_fragment(
+    package: Mapping[str, Any],
+    width_px: float,
+    top: float,
+    bottom: float,
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """중간 밴드에 들어갈 조각과 manifest 기록을 만든다.
+
+    notes가 있으면 모티프 대신 노트를 쓴다. `motif: "none"`은 모티프를 끄고
+    오늘의 레이아웃을 그대로 재현한다(빈 문자열 + None).
+    """
+    if package.get("notes"):
+        return _notes_fragment(package, width_px, top, bottom)
+    if str(package.get("motif") or "auto") == "none":
+        return "", None
+    return _motif_fragment(package, width_px, top, bottom)
+
+
+def _inject_middle_art(
+    svg_text: str, package: Mapping[str, Any], width_px: float, height_px: float
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """라벨 SVG의 재료 블록과 바코드 사이에 모티프/노트를 넣는다."""
+    top, bottom = _middle_occupied_band(svg_text, height_px, SAFE_PAD_MM * MM)
+    fragment, info = _middle_fragment(package, width_px, top, bottom)
+    if not fragment:
+        return svg_text, info
+    anchor = svg_text.find('<g id="barcode">')
+    if anchor < 0:
+        anchor = svg_text.rfind("</g>")
+    if anchor < 0:
+        anchor = svg_text.rfind("</svg>")
+    if anchor < 0:
+        return svg_text, info
+    return svg_text[:anchor] + fragment + svg_text[anchor:], info
+
+
 def build_pouch_svg(package: Mapping[str, Any]) -> Tuple[str, Dict[str, Any]]:
     """파우치 전면 최소 템플릿. `render_label`과 같은 레이어·여백 규약."""
     trim_w, trim_h = package["size_mm"]
@@ -560,12 +853,22 @@ def build_pouch_svg(package: Mapping[str, Any]) -> Tuple[str, Dict[str, Any]]:
     origin_x, origin_y = _origin_position(width, pad, bool(mark))
 
     parts_ing_y = pad + 92
+    # 중간 밴드 위 경계 — 실제로 그린 텍스트·마크의 하단에서 계산한다.
+    occupied = pad + 74 + 9 * 0.25
     for line in wrap_text(str(package.get("ingredients", "")), 8, text_w):
         parts.append(
             f'<text x="{pad}" y="{parts_ing_y:.1f}" font-family="monospace" font-size="8" '
             f'fill="{_attr(ink)}" fill-opacity="0.6">{_text(line)}</text>'
         )
+        occupied = parts_ing_y + 8 * 0.25
         parts_ing_y += 11
+    if mark:
+        box = _mark_box(width, pad, True)
+        assert box is not None
+        occupied = max(occupied, box[1] + box[2])
+    middle, middle_info = _middle_fragment(package, width, occupied, by)
+    if middle:
+        parts.append(middle)
 
     parts += [
         '<g id="barcode">',
@@ -601,6 +904,8 @@ def build_pouch_svg(package: Mapping[str, Any]) -> Tuple[str, Dict[str, Any]]:
         "barcode": {"digits": digits, "quiet_mm": 4.6, "bars": len(bars)},
         "sha256": hashlib.sha256(svg.encode()).hexdigest(),
     }
+    if middle_info:
+        manifest["middle"] = middle_info
     return svg, manifest
 
 
@@ -1105,23 +1410,31 @@ class PrintProfile:
             if svg.is_file():
                 original = svg.read_text(encoding="utf-8")
                 width_px = float(package["size_mm"][0]) * MM
+                height_px = float(package["size_mm"][1]) * MM
+                manifest_patch: Dict[str, Any] = {}
                 updated = _inject_mark(original, package, width_px)
                 updated = _rewrap_label_ingredients(updated, package)
                 updated = _relayout_origin(updated, package, width_px)
+                # 재료·바코드·마크의 실제 점유 위치를 읽은 뒤 그 사이에만 그린다.
+                updated, middle_info = _inject_middle_art(
+                    updated, package, width_px, height_px
+                )
+                if middle_info is not None:
+                    manifest_patch["middle"] = middle_info
                 if updated != original:
                     svg.write_text(updated, encoding="utf-8")
-                    if manifest_path.is_file():
-                        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if (updated != original or manifest_patch) and manifest_path.is_file():
+                    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    if updated != original:
                         data["sha256"] = hashlib.sha256(updated.encode()).hexdigest()
-                        if package.get("mark_path"):
-                            data["mark"] = True
-                        manifest_path.write_text(
-                            json.dumps(
-                                data, ensure_ascii=False, indent=2, sort_keys=True
-                            )
-                            + "\n",
-                            encoding="utf-8",
-                        )
+                    if package.get("mark_path"):
+                        data["mark"] = True
+                    data.update(manifest_patch)
+                    manifest_path.write_text(
+                        json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True)
+                        + "\n",
+                        encoding="utf-8",
+                    )
 
         if not svg.is_file():
             raise base.ProfileError(

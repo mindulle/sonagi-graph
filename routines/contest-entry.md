@@ -62,8 +62,33 @@ description: >
 - `spec.package`에 `brand`·`product`·`size_mm`(가로·세로 mm 두 값)가 필수다.
 - `type`은 `label` 또는 `pouch`(기본 `label`).
 - `mark_path`는 선택이지만 주면 존재하는 파일이어야 한다(SVG 권장).
+- `motif`는 `auto`(기본) 또는 `none`이다. `auto`는 브랜드 문자열 해시로만
+  정해지는 동심원 모티프를 재료와 바코드 사이 빈 밴드에 그린다. `none`은 그리지
+  않아 이전 레이아웃을 그대로 재현한다.
+- `notes`는 선택이다. 문자열 또는 짧은 줄 목록을 주면 모티프 대신 중간 밴드
+  가운데에 작은 글씨(최대 3줄)로 놓는다. 3줄을 넘으면 접은 뒤 줄임표로 자르고
+  라벨 manifest의 `middle.truncated`에 기록한다.
 - print는 네트워크·LLM 없이 결정론으로 돈다. `print_ready`를 켜지 않는 한
   콘테스트 제출용 표현물(도련 미적용)만 만든다.
+
+`notes`를 쓰는 최소 예(모티프 대신 중간 밴드에 문구를 놓는다):
+
+```json
+{
+  "brief": "차 브랜드 라벨 — calm",
+  "spec": {
+    "profile": "print",
+    "platform": "loudsourcing",
+    "package": {
+      "type": "label",
+      "brand": "Sonagi Tea",
+      "product": "Earl Grey 50g",
+      "size_mm": [90, 120],
+      "notes": ["우아한 향", "차분한 하루"]
+    }
+  }
+}
+```
 
 ### brand — 로고·마크
 
