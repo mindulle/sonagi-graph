@@ -3,28 +3,74 @@
   "rules": [
     {
       "id": "logo_vector_source",
+      "kind": "attribute",
+      "checkable_by": "token",
       "field": "format",
       "op": "in",
-      "value": [
-        "svg",
-        "ai",
-        "eps",
-        "pdf"
-      ],
+      "value": ["svg", "ai", "eps", "pdf"],
       "when_present": true,
-      "severity": "major",
+      "jakub_severity": "MEDIUM",
       "location": "vector_source",
-      "fix": "로고 원본을 벡터 포맷(SVG/AI/EPS/PDF)으로 교체하세요."
+      "fix": "로고 원본을 벡터 포맷(SVG/AI/EPS/PDF)으로 교체하세요.",
+      "exceptions": []
     },
     {
       "id": "logo_min_size",
+      "kind": "attribute",
+      "checkable_by": "token",
       "field": "min_size_px",
       "op": "gte",
       "value": 16,
       "when_present": true,
-      "severity": "minor",
+      "jakub_severity": "LOW",
       "location": "favicon_scale",
-      "fix": "파비콘 최소 크기(16px) 이상에서 식별 가능하도록 선 두께를 보강하세요."
+      "fix": "파비콘 최소 크기(16px) 이상에서 식별 가능하도록 선 두께를 보강하세요.",
+      "exceptions": []
+    },
+    {
+      "id": "logo_svg_missing_viewbox",
+      "kind": "source",
+      "checkable_by": "ast",
+      "ast_check": "svg_missing_viewbox",
+      "path_globs": ["**/*.svg"],
+      "jakub_severity": "HIGH",
+      "location": "svg_viewbox",
+      "fix": "<svg> 루트에 viewBox 속성을 명시해 축소·확대 시 비율이 깨지지 않게 하세요.",
+      "exceptions": [
+        {
+          "glob": "**/favicon*.svg",
+          "reason": "고정 16/32px 파비콘은 width/height 고정일 수 있음",
+          "basis": "브라우저 파비콘 스펙"
+        }
+      ]
+    },
+    {
+      "id": "logo_svg_raster_embed",
+      "kind": "source",
+      "checkable_by": "ast",
+      "ast_check": "svg_raster_embed",
+      "path_globs": ["**/*.svg"],
+      "jakub_severity": "HIGH",
+      "location": "svg_raster_embed",
+      "fix": "SVG 내부 <image> 래스터 임베드를 제거하고 순수 벡터 패스로 교체하세요.",
+      "exceptions": []
+    },
+    {
+      "id": "logo_svg_hardcoded_hex",
+      "kind": "source",
+      "checkable_by": "ast",
+      "ast_check": "svg_hardcoded_hex",
+      "path_globs": ["**/*.svg"],
+      "jakub_severity": "MEDIUM",
+      "location": "svg_color",
+      "fix": "단색 심볼·아이콘 SVG의 fill/stroke hex 값을 currentColor로 교체하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*brand*.*",
+          "reason": "멀티컬러 브랜드 마크는 고유 브랜드 색상 유지",
+          "basis": "mindulle-brand 컬러 가이드"
+        }
+      ]
     }
   ]
 }

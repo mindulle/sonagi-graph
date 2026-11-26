@@ -25,6 +25,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 from pydantic import BaseModel, Field
 
+from graphs.design_critique_rules import evaluate_ruleset_for_candidate
 from graphs.llm import chat_model
 
 CORE_AXIS_IDS = ("brief_fit", "concept_logic", "form_craft", "distinctiveness")
@@ -265,29 +266,12 @@ def evaluate_rules_for_candidate(
     candidate: Dict[str, Any],
     candidate_label: str,
     ruleset: Dict[str, Any],
+    rules_dir: Optional[Path] = None,
 ) -> List[Dict[str, str]]:
     """단일 후보에 대해 결정론적 JSON 규칙을 평가하고 발견 목록을 반환한다."""
-    findings: List[Dict[str, str]] = []
-    for rule in ruleset.get("rules", []):
-        field = rule.get("field")
-        if not field:
-            continue
-        when_present = bool(rule.get("when_present", True))
-        has_field = field in candidate and candidate.get(field) is not None
-        if when_present and not has_field:
-            continue
-
-        actual = candidate.get(field)
-        op = str(rule.get("op", "truthy"))
-        expected = rule.get("value")
-        if not _eval_rule_op(actual, op, expected):
-            findings.append(
-                {
-                    "severity": str(rule.get("severity", "major")),
-                    "location": f"{candidate_label}:{rule.get('location', field)}",
-                    "fix": str(rule.get("fix", f"{field} 규칙을 충족하도록 수정하세요.")),
-                }
-            )
+    findings, _not_verified = evaluate_ruleset_for_candidate(
+        candidate, candidate_label, ruleset, rules_dir=rules_dir
+    )
     return findings
 
 
@@ -358,8 +342,12 @@ def rules_layer(state: DesignCritiqueState) -> Dict[str, Any]:
     cand_a = state.get("candidate_a") or {}
     cand_b = state.get("candidate_b") or {}
 
-    findings_a = evaluate_rules_for_candidate(cand_a, "candidate_a", ruleset)
-    findings_b = evaluate_rules_for_candidate(cand_b, "candidate_b", ruleset)
+    findings_a, not_verified_a = evaluate_ruleset_for_candidate(
+        cand_a, "candidate_a", ruleset, rules_dir=settings.rules_dir
+    )
+    findings_b, not_verified_b = evaluate_ruleset_for_candidate(
+        cand_b, "candidate_b", ruleset, rules_dir=settings.rules_dir
+    )
 
     rule_results = {
         "asset_type": asset_type,
@@ -367,6 +355,7 @@ def rules_layer(state: DesignCritiqueState) -> Dict[str, Any]:
         "candidate_a_passed": not any(f["severity"] == "blocker" for f in findings_a),
         "candidate_b_passed": not any(f["severity"] == "blocker" for f in findings_b),
         "findings": findings_a + findings_b,
+        "not_verified": not_verified_a + not_verified_b,
     }
     return {
         "rule_results": rule_results,
