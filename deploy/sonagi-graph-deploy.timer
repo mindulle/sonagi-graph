@@ -1,0 +1,11 @@
+[Unit]
+Description=Check GHCR stable image and deploy sonagi-graph every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+RandomizedDelaySec=30
+Unit=sonagi-graph-deploy.service
+
+[Install]
+WantedBy=timers.target

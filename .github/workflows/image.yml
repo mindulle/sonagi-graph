@@ -1,0 +1,108 @@
+name: Image
+
+# CI가 master에서 성공한 뒤에만 GHCR 이미지를 만든다. 배포는 호스트가 5분마다
+# 당겨가는(pull) 방식이라 인바운드 러너도, 배포용 시크릿도 이 워크플로에 없다.
+# GITHUB_TOKEN의 packages:write만 쓴다.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: ["master"]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: image-master
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # CI 실패/취소된 커밋은 이미지로 만들지 않는다. PR CI는 push 이벤트가 아니다.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    # 의존성 설치 + 이미지 빌드(apt openssh/rsync 포함) + 두 태그 push.
+    # 보통 4~8분, 콜드 캐시에서 10분 안쪽이다.
+    timeout-minutes: 25
+    steps:
+      - name: Checkout CI commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 호스트의 langgraph CLI와 같은 버전으로 고정한다. 버전이 다르면 생성되는
+      # Dockerfile/베이스 이미지가 달라져 "호스트에서 되던 이미지"가 아니게 된다.
+      - name: Install LangGraph CLI
+        run: python3 -m pip install --quiet "langgraph-cli[inmem]==0.4.32"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        id: build
+        run: |
+          set -euo pipefail
+          SHA='${{ github.event.workflow_run.head_sha }}'
+          SHORT="${SHA:0:12}"
+          IMAGE='ghcr.io/mindulle/sonagi-graph'
+          echo "short=${SHORT}" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+          # `langgraph build -t`는 click 옵션이 multiple이 아니라 마지막 값만 남는다.
+          # sha 태그로 한 번 빌드하고, stable은 docker tag로 붙인다.
+          SECONDS=0
+          langgraph build -t "${IMAGE}:sha-${SHORT}"
+          docker tag "${IMAGE}:sha-${SHORT}" "${IMAGE}:stable"
+          echo "build_seconds=${SECONDS}" >> "$GITHUB_OUTPUT"
+
+      - name: Push tags
+        id: push
+        run: |
+          set -euo pipefail
+          IMAGE='${{ steps.build.outputs.image }}'
+          SHORT='${{ steps.build.outputs.short }}'
+          docker push "${IMAGE}:sha-${SHORT}"
+          docker push "${IMAGE}:stable"
+
+          # docker push가 채운 RepoDigests에서 digest를 읽는다. 태그가 아니라
+          # 저장소 단위 digest라 sha/stable이 같은 값을 가리킨다.
+          REF="$(docker inspect --format '{{index .RepoDigests 0}}' "${IMAGE}:sha-${SHORT}")"
+          DIGEST="${REF##*@}"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Job summary
+        if: always()
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+          SHORT: ${{ steps.build.outputs.short }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          BUILD_SECONDS: ${{ steps.build.outputs.build_seconds }}
+        run: |
+          {
+            echo "## GHCR image"
+            echo
+            echo "| 항목 | 값 |"
+            echo "| --- | --- |"
+            echo "| commit | \`${GITHUB_SHA}\` |"
+            echo "| sha tag | \`${IMAGE}:sha-${SHORT}\` |"
+            echo "| stable tag | \`${IMAGE}:stable\` |"
+            echo "| digest | \`${DIGEST:-unavailable}\` |"
+            echo "| build | ${BUILD_SECONDS:-?}s (push 제외) |"
+            echo
+            if [ -n "${DIGEST:-}" ]; then
+              echo "호스트 배포: \`deploy/sonagi-graph-deploy.sh --force\` 또는 타이머 대기."
+              echo "수동 고정 배포: \`langgraph up -p 8123 -d docker-compose.deploy.yml --image ${IMAGE}@${DIGEST} --wait --recreate\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
