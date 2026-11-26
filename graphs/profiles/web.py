@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import craft
 from langchain_core.prompts import ChatPromptTemplate
@@ -36,6 +36,62 @@ DEFAULT_SPEC: Dict[str, Any] = {
     "max_height": 3000,
     "jpg_quality": 90,
 }
+
+#: entry.md 경고 줄에 적는 스킵 경로 개수 상한.
+SKIP_WARNING_PATHS = 5
+
+
+def aggregate_preflight(
+    renders: Sequence[Mapping[str, Any]],
+) -> Tuple[List[Dict[str, str]], Dict[str, Any]]:
+    """변주별 `skipped_assets`/`preflight`를 하나로 모은다(GRAPH-30).
+
+    반환값은 `(skipped_assets, preflight)`이며 meta.json·manifest·entry.md가
+    같은 값을 쓴다. 스킵은 경로로 중복을 없애고 경로순으로 정렬한다. 같은
+    경로가 다른 이유로 여러 번 나오면 사전순으로 앞선 이유를 남긴다(결정론).
+
+    `checked`는 변주별 리포트의 **최대값**이다. web profile은 한 실행에 레시피
+    하나를 공유하므로(변주마다 같은 참조 집합) 합산하면 변주 수만큼 부풀려진다.
+    """
+    reasons: Dict[str, set] = {}
+    checked = 0
+    modes = set()
+    for render in renders:
+        for entry in render.get("skipped_assets") or []:
+            if isinstance(entry, Mapping):
+                path = str(entry.get("path") or "").strip()
+                reason = str(entry.get("reason") or "").strip()
+            else:
+                path, reason = str(entry or "").strip(), ""
+            if not path:
+                continue
+            reasons.setdefault(path, set()).add(reason)
+        report = render.get("preflight")
+        if isinstance(report, Mapping):
+            try:
+                checked = max(checked, int(report.get("checked") or 0))
+            except (TypeError, ValueError):
+                pass
+            mode = str(report.get("mode") or "").strip()
+            if mode:
+                modes.add(mode)
+
+    skipped = [
+        {"path": path, "reason": sorted(reasons[path])[0]} for path in sorted(reasons)
+    ]
+    # 원격 렌더가 하나라도 있으면 그 실행의 확인은 원격이다(혼합은 없어야 한다).
+    mode = "remote" if "remote" in modes else "local"
+    return skipped, {"checked": checked, "skipped": len(skipped), "mode": mode}
+
+
+def skip_warning_line(skipped: Sequence[Mapping[str, Any]]) -> str:
+    """entry.md에 넣는 한 줄 경고. 앞에서부터 최대 5개 경로만 적는다."""
+    paths = [str(row.get("path") or "") for row in skipped]
+    shown = ", ".join(paths[:SKIP_WARNING_PATHS])
+    line = f"⚠ 스킵된 자산 {len(paths)}개 — {shown}"
+    if len(paths) > SKIP_WARNING_PATHS:
+        line += f" 외 {len(paths) - SKIP_WARNING_PATHS}개"
+    return line
 
 
 def fallback_direction(ir: Mapping[str, Any]) -> Dict[str, Any]:
@@ -324,6 +380,7 @@ class WebProfile:
         board_spec = spec.get("board")
         board_enabled = preset.board if board_spec is None else bool(board_spec)
         options = {o["id"]: o for o in state.get("options") or []}
+        skipped_assets, preflight = aggregate_preflight(items)
 
         packed: List[Dict[str, Any]] = []
         for index, render in enumerate(items, start=1):
@@ -383,6 +440,8 @@ class WebProfile:
             "rendered_total": len(state.get("renders") or []),
             "selected_total": len(packed),
             "board": board_row,
+            "skipped_assets": skipped_assets,
+            "preflight": preflight,
             "items": packed,
         }
         (pack_dir / "meta.json").write_text(
@@ -390,6 +449,8 @@ class WebProfile:
         )
 
         lines = [f"# 엔트리 팩 — {spec.get('platform')}", ""]
+        if skipped_assets:
+            lines += [skip_warning_line(skipped_assets), ""]
         if board_row:
             lines += [
                 f"- 보드: `board.png` ({board_row['width']}×{board_row['height']}, "
@@ -425,6 +486,12 @@ class WebProfile:
             base.collect_artifacts(artifact_paths, run_dir),
             kind="entry_pack",
         )
+        # 스키마는 그대로 두고 meta에만 덧붙인다(기존 소비처는 무시해도 된다).
+        manifest["meta"] = {
+            **dict(manifest.get("meta") or {}),
+            "skipped_assets": skipped_assets,
+            "preflight": preflight,
+        }
         manifest_path = core_artifacts.write_manifest(run_dir, manifest)
 
         return {
@@ -433,6 +500,8 @@ class WebProfile:
             "meta": str(pack_dir / "meta.json"),
             "manifest": str(manifest_path),
             "manifest_digest": core_artifacts.manifest_digest(manifest),
+            "skipped_assets": skipped_assets,
+            "preflight": preflight,
         }
 
     def mockups(
