@@ -111,6 +111,10 @@ langgraph up -p 8123 --recreate -d docker-compose.deploy.yml
   `--delete`는 전용 원격 루트 안에서만 적용된다. 약 1.3MB, 1초 안쪽.
 - `render(recipe, style, breakpoint, dark, out_dir)` — 레시피 업로드 → ssh 렌더 →
   산출물(SVG·manifest·CREDITS·raster) 다운로드 → 원격 임시 디렉터리 정리.
+- 렌더 전 **자산 preflight**(GRAPH-24) — 레시피 참조를 모아 ssh **한 번**으로
+  존재를 확인하고, 없는 참조만 걷어낸 레시피로 렌더한다. 결과에는
+  `skipped_assets`와 `preflight {mode, checked, skipped, renderable}`가 붙는다.
+  ssh 확인이 실패하면 "전부 누락"으로 넘기지 않고 `PreflightError`로 멈춘다.
 - `healthcheck()` — 원격 `render_recipe.py` 존재와 카탈로그 항목 수를 확인한다.
 - `run` 훅을 받으므로 테스트는 ssh 없이 argv만 검증한다(`test_remote_assets.py`).
 

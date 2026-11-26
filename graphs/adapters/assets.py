@@ -51,6 +51,7 @@ import craft  # noqa: E402  - 저장소 루트의 판단 로직(LLM 없음)
 
 from graphs.core import env as core_env  # noqa: E402
 from graphs.core import exec as core_exec  # noqa: E402
+from graphs.adapters import preflight as preflight_mod  # noqa: E402
 
 #: argv → stdout. 넘기지 않으면 core/exec가 현재 인터프리터로 실행한다.
 Runner = Callable[..., str]
@@ -176,18 +177,41 @@ def render_recipe(
     out_dir: Path,
     paths: Optional[AssetPaths] = None,
     run: Optional[Runner] = None,
+    preflight: Optional[Mapping[str, Any]] = None,
+    check_assets: bool = True,
 ) -> Dict[str, Any]:
     """변주 1개를 렌더하고 SVG·manifest 경로를 붙여 돌려준다.
 
     `variant["theme"] == "dark"`면 렌더러에 `--dark`를 넘긴다(web profile과 같은 규약).
+
+    렌더 전에 레시피의 자산 참조를 확인하고, 없는 파일만 걷어낸 레시피로
+    렌더한다(GRAPH-24). 결과에는 `skipped_assets`·`preflight`가 함께 붙는다.
+    `preflight`를 넘기면 이미 확인된 것으로 보고 다시 ssh/파일 검사를 하지
+    않는다(변주 여러 개를 렌더할 때 호출부가 한 번만 확인한다).
     """
     paths = _paths(paths)
     out_dir = _absolute(out_dir)
+    recipe = _absolute(recipe)
+    report: Mapping[str, Any]
+    if preflight is not None:
+        report = dict(preflight)
+    elif check_assets and recipe.is_file():
+        filtered, checked = preflight_mod.preflight_recipe_file(
+            recipe,
+            catalog_path=paths.catalog,
+            assets_dir=paths.assets_dir,
+        )
+        preflight_mod.ensure_renderable(checked)
+        recipe = preflight_mod.write_filtered_recipe(recipe, filtered, checked)
+        report = checked
+    else:
+        # 레시피가 아직 없으면(스텁 렌더러 테스트) 참조를 모을 수 없다.
+        report = preflight_mod.empty_report("local")
     argv: List[Any] = [
         sys.executable,
         _script(paths, "render_recipe.py"),
         "--recipe",
-        _absolute(recipe),
+        recipe,
         "--style",
         _absolute(paths.assets_dir) / "styles" / f"{variant['style']}.json",
         "--catalog",
@@ -211,6 +235,8 @@ def render_recipe(
         **dict(variant),
         "svg": str(svg),
         "manifest": str(manifest) if manifest is not None else None,
+        "skipped_assets": list(report.get("skipped") or []),
+        "preflight": dict(report),
     }
 
 
@@ -221,9 +247,29 @@ def render_variants(
     run_dir: Path,
     paths: Optional[AssetPaths] = None,
     run: Optional[Runner] = None,
+    preflight: Optional[Mapping[str, Any]] = None,
+    check_assets: bool = True,
 ) -> List[Dict[str, Any]]:
-    """변주 전부를 `run_dir/<variant-id>`에 렌더한다."""
+    """변주 전부를 `run_dir/<variant-id>`에 렌더한다.
+
+    자산 preflight는 변주 수와 무관하게 **한 번**만 한다(ssh·카탈로그 비용).
+    """
     paths = _paths(paths)
+    recipe = _absolute(recipe)
+    report: Mapping[str, Any]
+    if preflight is not None:
+        report = dict(preflight)
+    elif check_assets and recipe.is_file():
+        filtered, checked = preflight_mod.preflight_recipe_file(
+            recipe,
+            catalog_path=paths.catalog,
+            assets_dir=paths.assets_dir,
+        )
+        preflight_mod.ensure_renderable(checked)
+        recipe = preflight_mod.write_filtered_recipe(recipe, filtered, checked)
+        report = checked
+    else:
+        report = preflight_mod.empty_report("local")
     return [
         render_recipe(
             recipe,
@@ -231,6 +277,7 @@ def render_variants(
             out_dir=Path(run_dir) / str(variant["id"]),
             paths=paths,
             run=run,
+            preflight=report,
         )
         for variant in variants
     ]
@@ -357,15 +404,30 @@ def run_pipeline(
     run_dir.mkdir(parents=True, exist_ok=True)
 
     recipe = import_content(content, run_dir=run_dir, paths=paths, run=run)
+    filtered, report = preflight_mod.preflight_recipe_file(
+        recipe,
+        catalog_path=paths.catalog,
+        assets_dir=paths.assets_dir,
+    )
+    preflight_mod.ensure_renderable(report)
+    prepared = preflight_mod.write_filtered_recipe(recipe, filtered, report)
     renders = render_variants(
-        variants, recipe=recipe, run_dir=run_dir, paths=paths, run=run
+        variants,
+        recipe=prepared,
+        run_dir=run_dir,
+        paths=paths,
+        run=run,
+        preflight=report,
     )
     critiques = lint_renders(renders, paths=paths, run=run)
     return {
         "run_id": resolved_id,
         "run_dir": run_dir,
         "recipe": recipe,
+        "render_recipe": prepared,
         "renders": renders,
         "critiques": critiques,
         "options": top_options(critiques, limit=limit, renders=renders),
+        "skipped_assets": list(report.get("skipped") or []),
+        "preflight": dict(report),
     }
