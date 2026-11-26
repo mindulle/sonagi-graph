@@ -1491,3 +1491,196 @@ def test_context_from_state_prefers_explicit_context(tmp_path):
     ctx = base.ProfileContext(run=lambda *a, **k: "", run_dir=tmp_path)
     assert base.context_from_state({"profile_ctx": ctx}) is ctx
     assert isinstance(base.context_from_state({}), base.ProfileContext)
+
+
+# ---------------------------------------------------------------------------
+# Print — 플랫폼 프리셋·W8 보고·가이드·레이아웃 (GRAPH-28·29)
+# ---------------------------------------------------------------------------
+
+
+def _loudsourcing_entry_spec(**overrides):
+    """프리셋 상한을 실제로 쓰도록 image_width 계열을 비운 엔트리 spec."""
+    spec = _entry_spec(platform="loudsourcing", **overrides)
+    for key in ("image_width", "max_height", "jpg_quality"):
+        spec.pop(key, None)
+    return spec
+
+
+def _capture_convert(captured, size=(400, 267)):
+    def convert(svg, out, width, max_height=3000):
+        from PIL import Image
+
+        captured.append(Path(svg).read_text(encoding="utf-8"))
+        Image.new("RGB", size, (250, 249, 245)).save(out, "PNG")
+
+    return convert
+
+
+def test_wrap_text_keeps_latin_words_whole():
+    text = "Camellia sinensis, bergamot oil, cornflower petals, natural flavour"
+    lines = print_profile.wrap_text(text, 8, 100)
+    assert len(lines) > 1
+    for word in text.split():
+        assert any(word in line for line in lines), (word, lines)
+    assert all(line.strip() for line in lines)
+
+
+def test_wrap_text_splits_cjk_per_character():
+    text = "차분한인쇄라벨디자인"
+    lines = print_profile.wrap_text(text, 10, 25)
+    assert len(lines) > 1
+    assert "".join(lines) == text
+
+
+def test_wrap_text_splits_only_a_single_overlong_word():
+    text = "supercalifragilisticexpialidocious"
+    lines = print_profile.wrap_text(text, 8, 20)
+    assert len(lines) > 1
+    assert "".join(lines) == text
+
+
+def test_origin_is_placed_below_mark_within_safe_margin(tmp_path):
+    import xml.etree.ElementTree as ET
+
+    mark = tmp_path / "mark.svg"
+    mark.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
+    package = print_profile.package_spec(
+        {"package": _package(type="pouch", mark_path=str(mark))}
+    )
+    svg, _ = print_profile.build_pouch_svg(package)
+
+    root = ET.fromstring(svg)
+    mark_element = next(el for el in root.iter() if el.get("id") == "mark")
+    origin = next(
+        el
+        for el in root.iter()
+        if print_profile._local_name(el.tag) == "text"
+        and el.get("text-anchor") == "end"
+    )
+    mark_bottom = float(mark_element.get("y")) + float(mark_element.get("height"))
+    assert float(origin.get("y")) >= mark_bottom + 8
+    pad = print_profile.SAFE_PAD_MM * print_profile.MM
+    width = float(package["size_mm"][0]) * print_profile.MM
+    assert float(origin.get("x")) <= width - pad + 0.1
+
+
+def test_label_origin_text_is_moved_away_from_mark():
+    import xml.etree.ElementTree as ET
+
+    text = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="340.2" height="453.5">'
+        '<g id="art"><text x="317.5" y="76.7" font-family="monospace" '
+        'font-size="8" text-anchor="end" fill="#b4551f">Jeju, Korea</text></g></svg>'
+    )
+    moved = print_profile._relayout_origin(text, {"mark_path": "/tmp/mark.svg"}, 340.2)
+    assert 'y="76.7"' not in moved
+    origin = next(
+        el for el in ET.fromstring(moved).iter() if el.get("text-anchor") == "end"
+    )
+    mark_size = print_profile.MARK_SIZE_MM * print_profile.MM
+    assert float(origin.get("y")) >= 6 + 6 + mark_size
+
+
+def test_print_pack_uses_preset_limits_naming_and_records_w8(tmp_path):
+    spec = _loudsourcing_entry_spec()
+    svg = tmp_path / "label.svg"
+    svg.write_text(_minimal_entry_svg(barcode_block=_VALID_BARCODE), encoding="utf-8")
+    captured = []
+    ctx = base.ProfileContext(
+        convert_png=_capture_convert(captured),
+        to_jpg=_fake_jpg,
+        run_dir=tmp_path / "run",
+    )
+    profile = base.get_profile("print")
+    variant = profile.plan({}, spec, [])[0]
+    skipped = [{"path": "/srv/assets/missing.png", "reason": "missing"}]
+    preflight = {"mode": "remote", "checked": 2, "skipped": skipped, "renderable": 1}
+    result = profile.pack(
+        [
+            {
+                **variant,
+                "svg": str(svg),
+                "skipped_assets": skipped,
+                "preflight": preflight,
+            }
+        ],
+        spec,
+        {"profile_ctx": ctx, "spec": spec, "brief": "b"},
+    )
+    pack_dir = Path(result["dir"])
+
+    # 프리셋 상한과 이름 규칙이 pack에 실제로 적용된다.
+    assert (pack_dir / "loudsourcing-01-label-sonagi-90x60-front.png").is_file()
+    assert (pack_dir / "loudsourcing-01-label-sonagi-90x60.jpg").is_file()
+    assert result["items"][0]["id"] == "label-sonagi-90x60"
+
+    meta = json.loads((pack_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["platform"] == "loudsourcing"
+    assert meta["preset"] == "loudsourcing"
+    assert meta["preset_warnings"] == []
+    assert meta["naming"] == "loudsourcing-{index:02d}-{id}"
+    assert meta["image_width"] == 1600
+    assert meta["max_height"] == 2400
+    assert meta["jpg_quality"] == 88
+    assert meta["skipped_assets"] == skipped
+    assert meta["preflight"] == {"label-sonagi-90x60": preflight}
+    assert result["items"][0]["skipped_assets"] == skipped
+    assert result["items"][0]["preflight"] == preflight
+
+    entry_md = (pack_dir / "entry.md").read_text(encoding="utf-8")
+    assert "건너뛴 자산 1건" in entry_md
+    manifest = json.loads(
+        (tmp_path / "run" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["meta"]["preset"] == "loudsourcing"
+    assert manifest["meta"]["skipped_assets"] == skipped
+    assert manifest["meta"]["preflight"] == {"label-sonagi-90x60": preflight}
+
+
+def test_entry_presentation_hides_guides_but_keeps_original_svg(tmp_path):
+    spec = _entry_spec(package=_package(type="pouch"))
+    svg = tmp_path / "pouch.svg"
+    svg.write_text(_pouch_svg_text(), encoding="utf-8")
+    captured = []
+    ctx = base.ProfileContext(
+        convert_png=_capture_convert(captured),
+        to_jpg=_fake_jpg,
+        run_dir=tmp_path / "run",
+    )
+    profile = base.get_profile("print")
+    variant = profile.plan({}, spec, [])[0]
+    profile.pack(
+        [{**variant, "svg": str(svg)}],
+        spec,
+        {"profile_ctx": ctx, "spec": spec, "brief": "b"},
+    )
+
+    # 변환에 쓰인 사본에서만 dieline·fold가 display:none이다.
+    assert 'display="none"' in captured[0]
+    original = svg.read_text(encoding="utf-8")
+    assert 'display="none"' not in original
+    assert 'id="dieline"' in original and 'id="fold"' in original
+    # 임시 사본은 pack에 남지 않는다.
+    assert not list((tmp_path / "run" / "pack").glob("*presentation*"))
+
+
+def test_guides_toggle_shows_layers_in_presentation(tmp_path):
+    spec = _entry_spec(package=_package(type="pouch"), guides=True)
+    svg = tmp_path / "pouch.svg"
+    svg.write_text(_pouch_svg_text(), encoding="utf-8")
+    captured = []
+    ctx = base.ProfileContext(
+        convert_png=_capture_convert(captured),
+        to_jpg=_fake_jpg,
+        run_dir=tmp_path / "run",
+    )
+    profile = base.get_profile("print")
+    variant = profile.plan({}, spec, [])[0]
+    result = profile.pack(
+        [{**variant, "svg": str(svg)}],
+        spec,
+        {"profile_ctx": ctx, "spec": spec, "brief": "b"},
+    )
+    assert 'display="none"' not in captured[0]
+    meta = json.loads((Path(result["dir"]) / "meta.json").read_text(encoding="utf-8"))
+    assert meta["guides"] is True

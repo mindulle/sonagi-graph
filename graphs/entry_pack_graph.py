@@ -179,7 +179,16 @@ def spec_node(state: EntryState) -> Dict[str, Any]:
     raw_spec = dict(state.get("spec") or {})
     # profile 해석은 기본값 병합보다 먼저 — web/print가 서로 다른 기본값을 갖는다.
     profile = profiles_base.profile_for_spec(raw_spec)
+    # 우선순위: profile 기본값 < 플랫폼 프리셋 < raw spec.
+    # 프리셋을 raw spec에 먼저 적용해야 profile 기본값(image_width·max_height·
+    # jpg_quality)이 프리셋 값을 덮어쓰지 않는다. platform이 없으면 apply()가
+    # 아무것도 채우지 않으므로 기존 동작과 같다.
+    if raw_spec.get("platform"):
+        platform_spec, _, _ = profile_presets.apply(raw_spec)
+    else:
+        platform_spec = dict(raw_spec)
     spec = dict(profile.defaults())
+    spec.update(platform_spec)
     spec.update(raw_spec)
     spec["tones"] = list(spec.get("tones") or ir.get("tones") or ["편집"])
     spec["media"] = spec.get("media") or ir.get("media", "web")
@@ -187,9 +196,6 @@ def spec_node(state: EntryState) -> Dict[str, Any]:
         spec["themes"] = ["light", "dark"] if spec["media"] == "web" else ["light"]
     if "breakpoints" not in spec:
         spec["breakpoints"] = ["desktop"] if spec["media"] == "web" else ["mobile"]
-    # 플랫폼을 명시했을 때만 프리셋을 병합한다 — platform 없는 web/print 기본 동작 불변.
-    if raw_spec.get("platform"):
-        spec, _, _ = profile_presets.apply(spec)
     if not spec.get("seed"):
         spec["seed"] = hashlib.sha1(str(raw).encode("utf-8")).hexdigest()[:8]
     # 선택 훅: profile이 입력을 먼저 검증하면 knowledge·LLM 호출 전에 멈춘다.
