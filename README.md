@@ -45,9 +45,34 @@ python3 scripts/graph_cli.py run error_triage \
 python3 scripts/graph_cli.py status <thread_id>
 python3 scripts/graph_cli.py approve <thread_id> --graph copywriting_craft \
     --values '{"selected_option_index":1}' --wait
+python3 scripts/graph_cli.py approve <thread_id> --graph entry_pack \
+    --values '{"selection":["forest-paper-desktop-light"]}' \
+    --tag 차분함 --tag 여백 --reason "빈 공간이 편안해서" --wait
+python3 scripts/graph_cli.py decisions --last 5
+python3 scripts/graph_cli.py taste
 ```
 
 `LANGGRAPH_URL`로 서버 주소를 바꾼다(기본 `http://127.0.0.1:8123`).
+
+### 취향 기록 (GRAPH-35)
+
+`approve`가 성공하면 그 선택을 `SONAGI_TASTE_DIR`(기본 `/home/ubuntu/sonagi-taste`)
+아래 `decisions.jsonl`에 한 줄 덧붙인다. 무엇을 보고 무엇을 골랐는지, 왜 골랐는지가
+남아 다음 실행의 순위 근거가 된다.
+
+```bash
+# 승인할 때마다 이유를 남긴다 (태그는 반복 가능)
+python3 scripts/graph_cli.py approve <thread_id> --graph entry_pack \
+    --values '{"selection":["variant-a"]}' \
+    --tag 차분함 --tag 여백 --reason "빈 공간이 편안해서" --wait
+
+# 최근 기록 / 요약
+python3 scripts/graph_cli.py decisions --last 5 --json
+python3 scripts/graph_cli.py taste
+```
+
+기록에 실패해도 승인은 그대로 진행된다(경고만 stderr). 파일은 append-only라
+지난 기록을 고쳐 쓰지 않는다. 30건 미만이면 통계를 만들지 않고 `early`로 표시한다.
 
 Kimaki 흐름:
 
