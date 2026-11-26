@@ -1,17 +1,20 @@
 [Unit]
 Description=sonagi-graph release-asset deploy (GitHub prerelease image)
-Documentation=file:///home/ubuntu/sonagi-graph/docs/DEPLOY_GHCR.md
+Documentation=file:///home/ubuntu/sonagi-graph-deploy/docs/DEPLOY_GHCR.md
 Wants=network-online.target
 After=network-online.target docker.service
 
 [Service]
 Type=oneshot
 User=ubuntu
-WorkingDirectory=/home/ubuntu/sonagi-graph
+# 타이머가 체크아웃/리셋해도 되는 유일한 트리다. 에이전트 체크아웃
+# (/home/ubuntu/sonagi-graph)은 배포가 건드리지 않는다.
+WorkingDirectory=/home/ubuntu/sonagi-graph-deploy
+Environment=SONAGI_GRAPH_REPO=/home/ubuntu/sonagi-graph-deploy
 # langgraph CLI는 ~/.local/bin에 있다. systemd 기본 PATH에는 없으므로 명시한다.
 Environment=HOME=/home/ubuntu
 Environment=PATH=/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=/home/ubuntu/sonagi-graph/deploy/sonagi-graph-deploy.sh
+ExecStart=/home/ubuntu/sonagi-graph-deploy/deploy/sonagi-graph-deploy.sh
 TimeoutStartSec=900
 Nice=10
 SyslogIdentifier=sonagi-graph-deploy
