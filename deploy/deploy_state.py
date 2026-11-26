@@ -1,32 +1,37 @@
 #!/usr/bin/env python3
-"""sonagi-graph pull 배포 상태 헬퍼.
+"""sonagi-graph release-asset 배포 상태 헬퍼.
 
-`deploy/sonagi-graph-deploy.sh`가 digest 비교와 상태 전이를 이 파일에 맡긴다.
-표준 라이브러리만 쓰고, 상태 파일은 같은 디렉터리의 임시 파일에 쓴 뒤
-`os.replace`로 교체한다(중간에 죽어도 반쯤 쓴 JSON이 남지 않는다).
+호스트는 GHCR 대신 GitHub prerelease의 `image-<sha12>` 태그와
+`graph-image.tar.zst` 자산을 배포 단위로 쓴다. 이 파일은 태그 비교와
+상태 전이만 맡는다. 표준 라이브러리만 쓰고, 상태 파일은 임시 파일에 쓴 뒤
+`os.replace`로 교체한다.
 
 상태 파일 예시 (/home/ubuntu/.sonagi-graph-deploy.json):
 
     {
-      "digest": "sha256:...",            # 지금 컨테이너가 쓰는 이미지
-      "previous_digest": "sha256:...",   # 롤백 대상
-      "image": "ghcr.io/mindulle/sonagi-graph",
-      "tag": "stable",
+      "tag": "image-a9fb1dbaeddd",
+      "previous_tag": "image-0123456789ab",
+      "image_ref": "ghcr.io/mindulle/sonagi-graph:sha-a9fb1dbaeddd",
+      "previous_image_ref": "ghcr.io/mindulle/sonagi-graph:sha-0123456789ab",
+      "digest": "sha256:...",              # docker image ID (로컬 내용 digest)
+      "previous_digest": "sha256:...",
       "deployed_at": "2026-11-26T00:00:00Z",
       "previous_deployed_at": "...",
       "updated_at": "...",
-      "failed_digest": null,             # 마지막으로 실패한 digest (자동 재시도 금지)
+      "failed_tag": null,                  # 마지막으로 실패한 릴리스 태그
       "failed_at": null,
-      "last_error": null
+      "last_error": null,
+      "history": ["image-a9fb1dbaeddd", "image-0123456789ab"]
     }
 
 CLI는 bash에서 쓰기 좋게 한 줄/탭 구분 출력만 낸다.
 
-    deploy_state.py normalize --value 'ghcr.io/x@sha256:...'
-    deploy_state.py plan --state FILE --digest sha256:... [--force]
-    deploy_state.py success --state FILE --digest sha256:... --image IMAGE --tag stable
-    deploy_state.py failure --state FILE --digest sha256:... --error "메시지"
-    deploy_state.py get --state FILE --field digest
+    deploy_state.py normalize --value image-a9fb1dbaeddd
+    deploy_state.py plan --state FILE --tag image-... [--force]
+    deploy_state.py success --state FILE --tag image-... --image-ref REF --digest SHA
+    deploy_state.py failure --state FILE --tag image-... --error "메시지"
+    deploy_state.py get --state FILE --field tag
+    deploy_state.py history --state FILE --limit 3
     deploy_state.py show --state FILE
 """
 
@@ -37,21 +42,20 @@ import re
 import sys
 import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
 
-_DIGEST_RE = re.compile(r"sha256:([0-9a-fA-F]{64})", re.IGNORECASE)
+_TAG_RE = re.compile(r"^image-([0-9a-f]{7,40})$", re.IGNORECASE)
 
 
 def utc_now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def normalize_digest(value):
-    """`repo@sha256:...`, `sha256:...`, 공백 섞인 값을 `sha256:<64hex>`로 만든다."""
-    match = _DIGEST_RE.search(value or "")
-    if not match:
-        raise ValueError(f"sha256 digest가 아니다: {value!r}")
-    return "sha256:" + match.group(1).lower()
+def normalize_tag(value):
+    """`image-<7~40 hex>`만 허용하고 소문자로 정규화한다."""
+    tag = (value or "").strip().lower()
+    if not _TAG_RE.match(tag):
+        raise ValueError(f"image-<sha> 태그가 아니다: {value!r}")
+    return tag
 
 
 def load_state(path):
@@ -80,63 +84,89 @@ def save_state(path, state):
             os.unlink(tmp_path)
 
 
-def plan(state, digest, force=False):
+def plan(state, tag, force=False):
     """(action, reason)을 돌려준다. action은 deploy/skip/blocked."""
-    digest = normalize_digest(digest)
+    tag = normalize_tag(tag)
     if force:
         return "deploy", "--force"
-    if state.get("failed_digest") == digest:
-        return "blocked", "이전에 실패한 digest (--force로만 재시도)"
-    current = state.get("digest")
+    if state.get("failed_tag") == tag:
+        return "blocked", "이전에 실패한 릴리스 태그 (--force로만 재시도)"
+    current = state.get("tag")
     if not current:
         return "deploy", "첫 배포"
-    if current == digest:
-        return "skip", "이미 같은 digest가 배포됨"
-    return "deploy", f"digest 변경 {current} -> {digest}"
+    if current == tag:
+        return "skip", "이미 같은 릴리스 태그가 배포됨"
+    return "deploy", f"릴리스 태그 변경 {current} -> {tag}"
 
 
-def record_success(state, digest, image, tag, at=None):
-    digest = normalize_digest(digest)
+def _history(state, tag=None):
+    values = state.get("history")
+    if not isinstance(values, list):
+        values = []
+    tags = [t for t in values if isinstance(t, str) and t.startswith("image-")]
+    if tag:
+        tags = [t for t in tags if t != tag]
+        tags.insert(0, tag)
+    # 중복 제거 + 최근 10개만 유지
+    seen = set()
+    unique = []
+    for item in tags:
+        if item not in seen:
+            seen.add(item)
+            unique.append(item)
+    return unique[:10]
+
+
+def record_success(state, tag, image_ref, digest, at=None):
+    tag = normalize_tag(tag)
     at = at or utc_now()
-    current = state.get("digest")
-    previous = state.get("previous_digest")
+    current = state.get("tag")
+    previous_tag = state.get("previous_tag")
+    previous_ref = state.get("previous_image_ref")
+    previous_digest = state.get("previous_digest")
     previous_at = state.get("previous_deployed_at")
-    if current and current != digest:
-        # 같은 digest를 --force로 다시 올린 경우엔 롤백 대상을 덮어쓰지 않는다.
-        previous = current
+    if current and current != tag:
+        # 같은 태그를 --force로 다시 올린 경우엔 롤백 대상을 덮어쓰지 않는다.
+        previous_tag = current
+        previous_ref = state.get("image_ref")
+        previous_digest = state.get("digest")
         previous_at = state.get("deployed_at")
     return {
-        "digest": digest,
-        "previous_digest": previous,
-        "image": image,
         "tag": tag,
+        "previous_tag": previous_tag,
+        "image_ref": image_ref,
+        "previous_image_ref": previous_ref,
+        "digest": digest,
+        "previous_digest": previous_digest,
         "deployed_at": at,
         "previous_deployed_at": previous_at,
         "updated_at": at,
-        "failed_digest": None,
+        "failed_tag": None,
         "failed_at": None,
         "last_error": None,
+        "history": _history(state, tag),
     }
 
 
-def record_failure(state, digest, error, at=None):
-    """현재 배포 상태는 그대로 두고 실패한 digest만 기록한다(롤백 후 상태 복원)."""
-    digest = normalize_digest(digest)
+def record_failure(state, tag, error, at=None):
+    """현재 배포 상태는 그대로 두고 실패한 태그만 기록한다(롤백 후 상태 복원)."""
+    tag = normalize_tag(tag)
     at = at or utc_now()
     updated = dict(state)
     updated.update(
         {
-            "failed_digest": digest,
+            "failed_tag": tag,
             "failed_at": at,
             "last_error": (error or "")[:500],
             "updated_at": at,
         }
     )
+    updated["history"] = _history(state)
     return updated
 
 
 def _cmd_plan(args):
-    action, reason = plan(load_state(args.state), args.digest, force=args.force)
+    action, reason = plan(load_state(args.state), args.tag, force=args.force)
     print(f"{action}\t{reason}")
 
 
@@ -144,7 +174,7 @@ def _cmd_success(args):
     state = load_state(args.state)
     save_state(
         args.state,
-        record_success(state, args.digest, args.image, args.tag, at=args.at),
+        record_success(state, args.tag, args.image_ref, args.digest, at=args.at),
     )
 
 
@@ -152,13 +182,19 @@ def _cmd_failure(args):
     state = load_state(args.state)
     save_state(
         args.state,
-        record_failure(state, args.digest, args.error, at=args.at),
+        record_failure(state, args.tag, args.error, at=args.at),
     )
 
 
 def _cmd_get(args):
     value = load_state(args.state).get(args.field)
     print(value if isinstance(value, str) else "")
+
+
+def _cmd_history(args):
+    state = load_state(args.state)
+    for tag in _history(state)[: args.limit]:
+        print(tag)
 
 
 def _cmd_show(args):
@@ -169,7 +205,7 @@ def _cmd_show(args):
 
 def _cmd_normalize(args):
     try:
-        print(normalize_digest(args.value))
+        print(normalize_tag(args.value))
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(2)
@@ -179,23 +215,23 @@ def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_plan = sub.add_parser("plan", help="digest 비교만 한다")
+    p_plan = sub.add_parser("plan", help="릴리스 태그를 비교한다")
     p_plan.add_argument("--state", required=True)
-    p_plan.add_argument("--digest", required=True)
+    p_plan.add_argument("--tag", required=True)
     p_plan.add_argument("--force", action="store_true")
     p_plan.set_defaults(func=_cmd_plan)
 
     p_success = sub.add_parser("success", help="성공 상태를 기록한다")
     p_success.add_argument("--state", required=True)
+    p_success.add_argument("--tag", required=True)
+    p_success.add_argument("--image-ref", required=True)
     p_success.add_argument("--digest", required=True)
-    p_success.add_argument("--image", required=True)
-    p_success.add_argument("--tag", default="stable")
     p_success.add_argument("--at", default=None)
     p_success.set_defaults(func=_cmd_success)
 
-    p_failure = sub.add_parser("failure", help="실패한 digest를 기록한다")
+    p_failure = sub.add_parser("failure", help="실패한 태그를 기록한다")
     p_failure.add_argument("--state", required=True)
-    p_failure.add_argument("--digest", required=True)
+    p_failure.add_argument("--tag", required=True)
     p_failure.add_argument("--error", default="")
     p_failure.add_argument("--at", default=None)
     p_failure.set_defaults(func=_cmd_failure)
@@ -205,11 +241,16 @@ def build_parser():
     p_get.add_argument("--field", required=True)
     p_get.set_defaults(func=_cmd_get)
 
+    p_history = sub.add_parser("history", help="최근 배포 태그를 출력한다")
+    p_history.add_argument("--state", required=True)
+    p_history.add_argument("--limit", type=int, default=3)
+    p_history.set_defaults(func=_cmd_history)
+
     p_show = sub.add_parser("show", help="상태 파일 전체를 출력한다")
     p_show.add_argument("--state", required=True)
     p_show.set_defaults(func=_cmd_show)
 
-    p_norm = sub.add_parser("normalize", help="digest 문자열을 정규화한다")
+    p_norm = sub.add_parser("normalize", help="릴리스 태그를 정규화한다")
     p_norm.add_argument("--value", required=True)
     p_norm.set_defaults(func=_cmd_normalize)
 

@@ -1,8 +1,8 @@
 name: Image
 
-# CI가 master에서 성공한 뒤에만 GHCR 이미지를 만든다. 배포는 호스트가 5분마다
-# 당겨가는(pull) 방식이라 인바운드 러너도, 배포용 시크릿도 이 워크플로에 없다.
-# GITHUB_TOKEN의 packages:write만 쓴다.
+# CI가 master에서 성공하면 이미지를 만들어 GitHub prerelease 자산으로 올린다.
+# 호스트는 GHCR 대신 릴리스 자산(graph-image.tar.zst)을 기존 gh 토큰으로 받는다.
+# GHCR push는 classic PAT 없이도 되는 선택적 미러로만 남긴다.
 on:
   workflow_run:
     workflows: ["CI"]
@@ -10,8 +10,8 @@ on:
     branches: ["master"]
 
 permissions:
-  contents: read
-  packages: write
+  contents: write # prerelease 생성/자산 업로드
+  packages: write # GHCR 미러(선택)
 
 concurrency:
   group: image-master
@@ -19,14 +19,13 @@ concurrency:
 
 jobs:
   build:
-    # CI 실패/취소된 커밋은 이미지로 만들지 않는다. PR CI는 push 이벤트가 아니다.
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
-    # 의존성 설치 + 이미지 빌드(apt openssh/rsync 포함) + 두 태그 push.
-    # 보통 4~8분, 콜드 캐시에서 10분 안쪽이다.
-    timeout-minutes: 25
+    # 빌드 + 1GB 이미지 압축 + 릴리스 자산 업로드. 보통 5~10분, 느린 회선에서
+    # 업로드가 길어져도 30분 안쪽이다.
+    timeout-minutes: 30
     steps:
       - name: Checkout CI commit
         uses: actions/checkout@v4
@@ -38,17 +37,18 @@ jobs:
         with:
           python-version: "3.11"
 
-      # 호스트의 langgraph CLI와 같은 버전으로 고정한다. 버전이 다르면 생성되는
-      # Dockerfile/베이스 이미지가 달라져 "호스트에서 되던 이미지"가 아니게 된다.
+      # 호스트의 langgraph CLI와 같은 버전으로 고정한다.
       - name: Install LangGraph CLI
         run: python3 -m pip install --quiet "langgraph-cli[inmem]==0.4.32"
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Ensure zstd
+        run: |
+          set -euo pipefail
+          if ! command -v zstd >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends zstd
+          fi
+          zstd --version
 
       - name: Build image
         id: build
@@ -67,8 +67,33 @@ jobs:
           docker tag "${IMAGE}:sha-${SHORT}" "${IMAGE}:stable"
           echo "build_seconds=${SECONDS}" >> "$GITHUB_OUTPUT"
 
-      - name: Push tags
-        id: push
+      - name: Package release asset
+        id: package
+        run: |
+          set -euo pipefail
+          IMAGE='${{ steps.build.outputs.image }}'
+          SHORT='${{ steps.build.outputs.short }}'
+          SECONDS=0
+          docker save "${IMAGE}:sha-${SHORT}" | zstd -T0 -3 > graph-image.tar.zst
+          SIZE_BYTES="$(stat -c %s graph-image.tar.zst)"
+          echo "size_bytes=${SIZE_BYTES}" >> "$GITHUB_OUTPUT"
+          echo "size_mb=$((SIZE_BYTES / 1048576))" >> "$GITHUB_OUTPUT"
+          echo "package_seconds=${SECONDS}" >> "$GITHUB_OUTPUT"
+          ls -lh graph-image.tar.zst
+
+      # GHCR은 선택적 미러다. 여기서 실패해도 릴리스 배포는 계속된다.
+      - name: Log in to GHCR (optional mirror)
+        id: ghcr-login
+        continue-on-error: true
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push GHCR mirror (optional)
+        if: steps.ghcr-login.outcome == 'success'
+        continue-on-error: true
         run: |
           set -euo pipefail
           IMAGE='${{ steps.build.outputs.image }}'
@@ -76,33 +101,74 @@ jobs:
           docker push "${IMAGE}:sha-${SHORT}"
           docker push "${IMAGE}:stable"
 
-          # docker push가 채운 RepoDigests에서 digest를 읽는다. 태그가 아니라
-          # 저장소 단위 digest라 sha/stable이 같은 값을 가리킨다.
-          REF="$(docker inspect --format '{{index .RepoDigests 0}}' "${IMAGE}:sha-${SHORT}")"
-          DIGEST="${REF##*@}"
-          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+      - name: Publish prerelease asset
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: mindulle/sonagi-graph
+        run: |
+          set -euo pipefail
+          SHA='${{ github.event.workflow_run.head_sha }}'
+          SHORT='${{ steps.build.outputs.short }}'
+          TAG="image-${SHORT}"
+
+          # 재실행이면 기존 릴리스 자산을 덮어쓴다. prerelease는 latest로 표시되지
+          # 않으므로 별도 latest 조작은 하지 않는다.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" graph-image.tar.zst --clobber
+          else
+            gh release create "$TAG" graph-image.tar.zst \
+              --prerelease \
+              --title "Image ${SHORT}" \
+              --notes "commit ${SHA}" \
+              --target "$SHA"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      # 오래된 릴리스 자산을 정리한다. 최근 10개 image-* 릴리스만 남긴다.
+      # 호스트 상태 파일은 직전 태그만 롤백에 쓰므로 10개면 충분하다.
+      - name: Prune old image releases
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: mindulle/sonagi-graph
+        run: |
+          set -euo pipefail
+          OLD="$(gh release list --limit 50 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("image-"))]
+                  | sort_by(.createdAt) | reverse | .[10:] | .[].tagName')"
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            echo "prune ${tag}"
+            gh release delete "$tag" --yes --cleanup-tag || true
+          done <<< "$OLD"
 
       - name: Job summary
         if: always()
         env:
           IMAGE: ${{ steps.build.outputs.image }}
           SHORT: ${{ steps.build.outputs.short }}
-          DIGEST: ${{ steps.push.outputs.digest }}
+          SIZE_MB: ${{ steps.package.outputs.size_mb }}
+          SIZE_BYTES: ${{ steps.package.outputs.size_bytes }}
+          PACKAGE_SECONDS: ${{ steps.package.outputs.package_seconds }}
           BUILD_SECONDS: ${{ steps.build.outputs.build_seconds }}
+          GHCR_OUTCOME: ${{ steps.ghcr-login.outcome }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           {
-            echo "## GHCR image"
+            echo "## Release-asset image"
             echo
             echo "| 항목 | 값 |"
             echo "| --- | --- |"
             echo "| commit | \`${GITHUB_SHA}\` |"
-            echo "| sha tag | \`${IMAGE}:sha-${SHORT}\` |"
-            echo "| stable tag | \`${IMAGE}:stable\` |"
-            echo "| digest | \`${DIGEST:-unavailable}\` |"
-            echo "| build | ${BUILD_SECONDS:-?}s (push 제외) |"
+            echo "| release tag | \`${RELEASE_TAG:-image-${SHORT}}\` |"
+            echo "| asset | \`graph-image.tar.zst\` (${SIZE_MB:-?} MiB / ${SIZE_BYTES:-?} bytes) |"
+            echo "| build | ${BUILD_SECONDS:-?}s |"
+            echo "| package (save+zstd) | ${PACKAGE_SECONDS:-?}s |"
+            echo "| GHCR mirror | ${GHCR_OUTCOME:-skipped} |"
             echo
-            if [ -n "${DIGEST:-}" ]; then
-              echo "호스트 배포: \`deploy/sonagi-graph-deploy.sh --force\` 또는 타이머 대기."
-              echo "수동 고정 배포: \`langgraph up -p 8123 -d docker-compose.deploy.yml --image ${IMAGE}@${DIGEST} --wait --recreate\`"
+            if [ -n "${RELEASE_TAG:-}" ]; then
+              echo "호스트: \`deploy/sonagi-graph-deploy.sh --force\` 또는 5분 타이머 대기."
+              echo "자산: https://github.com/mindulle/sonagi-graph/releases/tag/${RELEASE_TAG}"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
