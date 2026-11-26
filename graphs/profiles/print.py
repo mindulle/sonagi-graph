@@ -404,9 +404,73 @@ def _origin_position(
     return width_px - pad, y
 
 
+_TEXT_ELEMENT_RE = re.compile(r"<text\b[^>]*>.*?</text>", re.IGNORECASE | re.DOTALL)
 _ORIGIN_TEXT_RE = re.compile(
     r'<text\b[^>]*\btext-anchor="end"[^>]*>.*?</text>', re.IGNORECASE | re.DOTALL
 )
+
+
+def _rewrap_label_ingredients(svg_text: str, package: Mapping[str, Any]) -> str:
+    """`render_label.py`가 글자 단위로 자른 재료 텍스트를 단어 단위로 다시 쓴다.
+
+    스크립트는 라틴 단어를 중간에서 자른다("bergamot o" / "il"). 원본을 고치지
+    않고 SVG의 재료 텍스트 노드만 원문 재료로 다시 줄바꿈한다. 바코드 조용영역
+    왼쪽 좌표에서 텍스트 폭을 역산하므로 스크립트 레이아웃과 같은 폭을 쓴다.
+    """
+    tags = list(_TEXT_ELEMENT_RE.finditer(svg_text))
+    ingredient_tags = [
+        match
+        for match in tags
+        if 'font-size="8"' in match.group(0)
+        and 'fill-opacity="0.6"' in match.group(0)
+        and "text-anchor" not in match.group(0)
+    ]
+    if not ingredient_tags:
+        return svg_text
+
+    quiet = next(
+        (
+            match.group(0)
+            for match in re.finditer(r"<rect\b[^>]*>", svg_text)
+            if 'id="barcode-quiet"' in match.group(0)
+        ),
+        None,
+    )
+    bx_match = re.search(r'\bx="([\d.]+)"', quiet or "")
+    pad = SAFE_PAD_MM * MM
+    text_w = (
+        (
+            float(bx_match.group(1))
+            if bx_match
+            else float(package["size_mm"][0]) * MM - pad
+        )
+        - pad
+        - 2 * MM
+    )
+    ink = (package.get("colors") or DEFAULT_COLORS).get("ink", DEFAULT_COLORS["ink"])
+
+    lines = wrap_text(str(package.get("ingredients", "")), 8, text_w)
+    replacement: List[str] = []
+    y = pad + 92
+    for line in lines:
+        replacement.append(
+            f'<text x="{pad:.1f}" y="{y:.1f}" font-family="monospace" font-size="8" '
+            f'fill="{_attr(ink)}" fill-opacity="0.6">{_text(line)}</text>'
+        )
+        y += 11
+
+    first = {"done": False}
+
+    def replace(match: re.Match[str]) -> str:
+        if first["done"]:
+            return ""
+        first["done"] = True
+        return "".join(replacement)
+
+    # 뒤에서부터 지우면 앞쪽 매치 위치가 흔들리지 않는다.
+    for match in reversed(ingredient_tags):
+        svg_text = svg_text[: match.start()] + replace(match) + svg_text[match.end() :]
+    return svg_text
 
 
 def _relayout_origin(svg_text: str, package: Mapping[str, Any], width_px: float) -> str:
@@ -1042,6 +1106,7 @@ class PrintProfile:
                 original = svg.read_text(encoding="utf-8")
                 width_px = float(package["size_mm"][0]) * MM
                 updated = _inject_mark(original, package, width_px)
+                updated = _rewrap_label_ingredients(updated, package)
                 updated = _relayout_origin(updated, package, width_px)
                 if updated != original:
                     svg.write_text(updated, encoding="utf-8")

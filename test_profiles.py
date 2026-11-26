@@ -1539,6 +1539,29 @@ def test_wrap_text_splits_only_a_single_overlong_word():
     assert "".join(lines) == text
 
 
+def test_label_ingredients_are_rewrapped_at_word_boundaries():
+    text = "Camellia sinensis, bergamot oil"
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="340.2" height="453.5">'
+        '<g id="art">'
+        '<text x="22.7" y="48.7" font-family="Archivo" font-size="20">Mindulle Tea</text>'
+        '<text x="22.7" y="114.7" font-family="monospace" font-size="8" '
+        'fill="#161616" fill-opacity="0.6">Camellia sinensis, bergamot o</text>'
+        '<text x="22.7" y="125.7" font-family="monospace" font-size="8" '
+        'fill="#161616" fill-opacity="0.6">il</text>'
+        '<rect id="barcode-quiet" x="160.7" y="343.2" width="156.8" height="87.7"/>'
+        "</g></svg>"
+    )
+    package = print_profile.package_spec({"package": _package(ingredients=text)})
+    out = print_profile._rewrap_label_ingredients(svg, package)
+    lines = re.findall(
+        r'<text[^>]*fill-opacity="0.6"[^>]*>(.*?)</text>', out, re.DOTALL
+    )
+    assert len(lines) > 1
+    assert " ".join(lines).split() == text.split()
+    assert not any(line.strip() == "il" for line in lines)
+
+
 def test_origin_is_placed_below_mark_within_safe_margin(tmp_path):
     import xml.etree.ElementTree as ET
 
