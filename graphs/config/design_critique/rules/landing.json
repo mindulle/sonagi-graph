@@ -1,0 +1,24 @@
+{
+  "asset_type": "landing",
+  "rules": [
+    {
+      "id": "landing_layout_grid",
+      "field": "layout_grid",
+      "op": "truthy",
+      "when_present": true,
+      "severity": "major",
+      "location": "layout_grid",
+      "fix": "랜딩 페이지의 컬럼 그리드와 반응형 브레이크포인트 규격을 명시하세요."
+    },
+    {
+      "id": "landing_mobile_viewport",
+      "field": "mobile_ready",
+      "op": "eq",
+      "value": true,
+      "when_present": true,
+      "severity": "major",
+      "location": "mobile_viewport",
+      "fix": "모바일 뷰포트(375px 기준) 레이아웃 깨짐을 수정하세요."
+    }
+  ]
+}

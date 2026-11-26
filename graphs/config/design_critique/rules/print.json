@@ -1,0 +1,35 @@
+{
+  "asset_type": "print",
+  "rules": [
+    {
+      "id": "print_bleed",
+      "field": "bleed_mm",
+      "op": "gte",
+      "value": 3,
+      "when_present": false,
+      "severity": "blocker",
+      "location": "print_bleed",
+      "fix": "인쇄용 사방 도련(bleed)을 최소 3mm 이상 확보하세요."
+    },
+    {
+      "id": "print_cmyk",
+      "field": "color_mode",
+      "op": "eq",
+      "value": "CMYK",
+      "when_present": false,
+      "severity": "blocker",
+      "location": "color_mode",
+      "fix": "색상 모드를 RGB에서 인쇄용 CMYK로 변환하세요."
+    },
+    {
+      "id": "print_paper_weight",
+      "field": "paper_weight_gsm",
+      "op": "gt",
+      "value": 0,
+      "when_present": false,
+      "severity": "major",
+      "location": "paper_weight",
+      "fix": "용지 평량(gsm) 스펙을 인쇄 사양서에 명시하세요."
+    }
+  ]
+}
