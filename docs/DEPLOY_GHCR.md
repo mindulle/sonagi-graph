@@ -27,7 +27,7 @@ CI가 master에서 성공하면 이미지를 **GitHub prerelease 자산**(`graph
         │  workflow_run: completed + success + push
         ▼
  GitHub Actions "Image"  (contents: write, packages: write)
-   langgraph build → ghcr.io/mindulle/sonagi-graph:sha-<12>
+   QEMU arm64 → langgraph build --platform linux/arm64
    docker save | zstd -3 → graph-image.tar.zst
    gh release create image-<12> --prerelease (자산 업로드)
    GHCR push (선택적 미러, 실패해도 무시)
@@ -54,10 +54,17 @@ CI가 master에서 성공하면 이미지를 **GitHub prerelease 자산**(`graph
 
 | 항목 | 값 |
 | --- | --- |
-| 비압축 이미지 | 약 1.08GB (`docker save` 기준) |
-| 릴리스 자산 | `zstd -3` 압축, 보통 400~700MB (빌드마다 다름) |
-| 새 릴리스 배포 | 다운로드 + 압축 해제 + `docker load` + 컨테이너 재생성, 보통 1~4분 |
+| 비압축 이미지 | 약 1.1GB (`docker save` 기준) |
+| 릴리스 자산 | `zstd -3` 압축, 실측 약 299MiB (빌드마다 다름) |
+| 새 릴리스 배포 | 다운로드 + 압축 해제 + `docker load` + 컨테이너 재생성, 실측 약 1분 |
 | 변경 없음 | 릴리스 목록 조회만, 수 초 |
+
+**아키텍처 주의**: 호스트는 `aarch64`(Docker `arm64`)다. CI는 QEMU로
+`--platform linux/arm64` 이미지를 만든다. amd64 이미지를 배포하면 compose가
+platform mismatch로 거부하고 API 컨테이너가 내려간다. 그래서 워크플로가 빌드
+직후 `docker image inspect --format '{{.Architecture}}'`로 `arm64`를 확인하고,
+배포 스크립트도 `ensure_image`에서 호스트/이미지 아키텍처를 비교해 다르면
+배포 전에 멈춘다.
 
 5분 타이머보다 다운로드가 길어지면 다음 회차는 systemd가 중복 실행하지 않고
 넘어간다. 수동 실행과 겹치면 `flock`으로 한쪽만 진행한다.
@@ -229,6 +236,8 @@ GHCR read를 쓰려면 **classic PAT**(`read:packages`)가 필요하다.
 | 자산 다운로드 실패 | 네트워크, GitHub API rate limit, 릴리스 자산 삭제 여부 확인 |
 | 디스크 부족 | `docker image prune`, 오래된 릴리스/로컬 이미지 정리 |
 | `langgraph up`이 pull 시도 | `--no-pull` 누락. 스크립트를 최신 master로 갱신 |
+| platform mismatch (amd64/arm64) | CI가 arm64로 빌드했는지 확인. 스크립트가 배포 전 아키텍처를 검사한다 |
+| 첫 배포 실패 후 서비스 down | 스크립트가 배포 전 실행 중이던 이미지로 자동 복구를 시도한다. 실패 시 `langgraph up --image sonagi-graph-langgraph-api:latest --no-pull` |
 | 그래프 수 < 11 | health 실패로 처리하고 직전 태그로 자동 롤백 |
 | 롤백도 실패 | `journalctl -u sonagi-graph-deploy.service`, `docker compose -p sonagi-graph ps` |
 
