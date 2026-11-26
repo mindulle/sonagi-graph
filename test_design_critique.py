@@ -455,3 +455,94 @@ def test_false_positive_tuning_autofocus_and_stop_propagation():
     rule_ids = {f.get("rule_id") for f in findings}
     assert "a11y.autofocus.prop" not in rule_ids
     assert "a11y.click.div" not in rule_ids
+
+
+def test_false_positive_tuning_graph_50_four_cases():
+    """GRAPH-50 오탐 4종 정리 및 정상 탐지 2건 유지 회귀 테스트."""
+    from pathlib import Path
+    from graphs.design_critique_rules import evaluate_ruleset_for_candidate
+
+    rules_dir = Path(mod.DEFAULT_CONFIG_DIR) / "rules"
+    landing = json.loads((rules_dir / "landing.json").read_text(encoding="utf-8"))
+
+    candidate = {
+        "id": "A",
+        "source_files": {
+            # 1) Next.js 템플릿 자산은 제외, 커스텀 SVG는 유지
+            "public/file.svg": '<svg><path fill="#666" /></svg>',
+            "public/globe.svg": '<svg><path fill="#666" /></svg>',
+            "public/next.svg": '<svg><path fill="#000" /></svg>',
+            "public/vercel.svg": '<svg><path fill="#000" /></svg>',
+            "public/window.svg": '<svg><path fill="#666" /></svg>',
+            "public/custom-badge.svg": '<svg><path fill="#123456" /></svg>',
+            # 2) type.allcaps.tracking: 인라인 letterSpacing 인식, 무자간은 유지
+            "components/BacklinksSection.tsx": (
+                "export const H = () => <h3 style={{\n"
+                "  textTransform: 'uppercase',\n"
+                "  letterSpacing: '0.05em',\n"
+                "}}>Backlinks</h3>;"
+            ),
+            "components/WiredCopyNoteShape.tsx": (
+                "export const N = () => <div style={{ fontSize: '10px', textTransform: 'uppercase' }}>NOTE</div>;"
+            ),
+            "components/ZeroTracking.tsx": (
+                "export const Z = () => <div style={{ textTransform: 'uppercase', letterSpacing: '0' }}>ZERO</div>;"
+            ),
+            # 3) ui.hover.media_query: 색상 전용 hover 제외, 비색상(transform/opacity) hover 유지
+            "app/globals.css": (
+                "a:hover { color: var(--brand); }\n"
+                ".link:hover,\n.prose a:hover {\n  color: #fff;\n  background-color: #1991b9;\n}\n"
+                ".card:hover { transform: translateY(-2px); }\n"
+            ),
+            # 4) ui.icon.hardcoded: 데이터 상수 SVG 문자열 제외, JSX UI 아이콘 유지
+            "src/AssetDrawer.tsx": (
+                "const SAMPLES = [\n"
+                "  { label: 'star', svg: '<svg viewBox=\"0 0 24 24\" fill=\"#f59e0b\"><path d=\"M0 0\"/></svg>' },\n"
+                "];\n"
+                "export const ChromeIcon = () => <svg viewBox=\"0 0 24 24\" fill=\"#ef4444\"><path d=\"M0 0\"/></svg>;\n"
+            ),
+            # 정상 동작 유지: transition-all
+            "components/ReadingProgress.tsx": (
+                "export const Bar = () => <div className=\"h-1 transition-all duration-150\" />;"
+            ),
+        },
+    }
+
+    findings, _ = evaluate_ruleset_for_candidate(
+        candidate, "candidate_a", landing, rules_dir=rules_dir
+    )
+    locs = [f["location"] for f in findings]
+
+    # 1) Next.js 템플릿 자산 5종 제외, 커스텀 SVG는 탐지
+    for tmpl in ("file.svg", "globe.svg", "next.svg", "vercel.svg", "window.svg"):
+        assert not any(f"public/{tmpl}" in loc for loc in locs), f"{tmpl} should be excluded"
+    assert any("public/custom-badge.svg" in loc for loc in locs)
+
+    # 2) 인라인 letterSpacing 면제, 무자간(WiredCopyNoteShape, ZeroTracking) 탐지
+    assert not any("BacklinksSection.tsx" in loc for loc in locs)
+    assert any(
+        f.get("rule_id") == "type.allcaps.tracking" and "WiredCopyNoteShape.tsx" in f["location"]
+        for f in findings
+    )
+    assert any(
+        f.get("rule_id") == "type.allcaps.tracking" and "ZeroTracking.tsx" in f["location"]
+        for f in findings
+    )
+
+    # 3) 색상 전용 hover 제외, transform hover(5행)만 탐지
+    hover_locs = [
+        f["location"] for f in findings if f.get("rule_id") == "ui.hover.media_query"
+    ]
+    assert len(hover_locs) == 1 and hover_locs[0].endswith("app/globals.css:7")
+
+    # 4) 데이터 상수 SVG(2행) 제외, JSX UI 아이콘(4행)만 탐지
+    icon_locs = [
+        f["location"] for f in findings if f.get("rule_id") == "ui.icon.hardcoded"
+    ]
+    assert any(loc.endswith("src/AssetDrawer.tsx:4") for loc in icon_locs) and not any("src/AssetDrawer.tsx:2" in loc for loc in icon_locs)
+
+    # 정상 동작 유지: ReadingProgress.tsx transition-all
+    assert any(
+        f.get("rule_id") == "motion.transition.all" and "ReadingProgress.tsx" in f["location"]
+        for f in findings
+    )

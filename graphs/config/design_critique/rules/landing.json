@@ -16,7 +16,12 @@
       "**/scripts/**",
       "**/figma-automation/**",
       "**/makereal.ts",
-      "**/apps/obsidian-plugin/main.js"
+      "**/apps/obsidian-plugin/main.js",
+      "**/public/file.svg",
+      "**/public/globe.svg",
+      "**/public/next.svg",
+      "**/public/vercel.svg",
+      "**/public/window.svg"
     ]
   },
   "rules": [
@@ -368,7 +373,7 @@
         "**/*.js"
       ],
       "pattern": "\\buppercase\\b",
-      "line_negate": "tracking-",
+      "line_negate": "tracking-|letterSpacing\\s*:(?!\\s*['\\\"]?(?:0(?:px|em|rem)?|normal)['\\\"]?(?:\\s*[,;}]|$))|letter-spacing\\s*:(?!\\s*['\\\"]?(?:0(?:px|em|rem)?|normal)['\\\"]?(?:\\s*[,;}]|$))",
       "jakub_severity": "LOW",
       "source": "better-typography / Letter-spacing by size",
       "fix": "대문자(uppercase) 라벨에는 자간(tracking-wider 등)을 추가해 가독성을 확보하세요.",
@@ -384,7 +389,8 @@
           "reason": "스토리북 데모 파일 면제",
           "basis": "jakub-ruleset.draft.json scope.exclude"
         }
-      ]
+      ],
+      "context_lines": 2
     },
     {
       "id": "motion.transition.all",
@@ -1272,7 +1278,8 @@
           "reason": "서드파티 tldraw 벤더 정적 아이콘 에셋",
           "basis": "vendor asset exclusion"
         }
-      ]
+      ],
+      "line_negate": "(['\\\"`])\\s*<svg\\b"
     },
     {
       "id": "ui.svg.hardcoded.ast",
@@ -1382,7 +1389,8 @@
           "reason": "스토리북 데모 파일 면제",
           "basis": "jakub-ruleset.draft.json scope.exclude"
         }
-      ]
+      ],
+      "ignore_color_only_css_hover": true
     },
     {
       "id": "ui.overlay.overscroll",
