@@ -287,4 +287,58 @@ CMYK·PDF/X·도련은 당선된 뒤 인쇄소에 넘길 때만 의미가 있다
   **락업**(`lockup.svg`·`lockup.pdf`, 워드마크 아웃라인)을 더한다. meta에는
   `mode`·`brief_sha256`·`candidate`·`candidate_gates`가 남는다.
 
+#### 8.4.2 refine 모드 — 기존 인장 정련 (GRAPH-33 후속)
+
+`spec.brand.mode = "refine"`은 **우리가 이미 가진 마스터 인장을 정련**한다.
+v1 explore가 브리프에서 기하 프리미티브를 새로 그려 "범용 로고 생성기"처럼
+보였던 문제를 뒤집는다. 원본 SVG의 구조를 읽고 그 구조만 남긴다.
+
+```jsonc
+{
+  "profile": "brand",
+  "brand": {
+    "mode": "refine",
+    "source_mark": "/home/ubuntu/mindulle-design-system/packages/brand-assets/01_master_seal/light/master-seal-light.svg",
+    "brief": "민들레 — 차분한 스튜디오. 16px에서도 인장으로 읽혀야 한다.",
+    "name": "mindulle",
+    "candidates": 8,                 // 8~12
+    "families": ["seal-refined", "monogram-in-seal",
+                 "abstract-dandelion", "negative-cut"],  // 선택, 기본 전체
+    "palette": {"ink": "#161616", "paper": "#fbf9f5", "accent": "#b4551f"}
+  }
+}
+```
+
+- `source_mark`는 필수다(`mark_path`와 다르다). 원본에서 **링 비율·방사 각도·
+  방사선 길이·코어 비율·씨앗 점 비율**을 읽어 `SourceModel`로 만든다. 유리 돔
+  대각선처럼 길이가 다른 선은 가장 많은 길이 군집(방사선)에서 제외한다.
+- 시드는 `sha256(brief·concept·seed_hint)` + 후보 인덱스다. 같은 원본·브리프·
+  인덱스면 좌표·SVG가 바이트 단위로 같다. LLM·난수 모듈은 쓰지 않는다.
+
+| 가족 | 원본에서 물려받는 것 | 바꾸는 것 |
+| --- | --- | --- |
+| `seal-refined` | 링 비율·방사 각도·코어 | 마이크로 디테일 제거, 링 수·획 굵기 |
+| `monogram-in-seal` | 이중 링 골격 | 이름 머리글자를 중앙에 광학 정렬(±0.5px) |
+| `abstract-dandelion` | 방사 각도·줄기 길이 | 씨앗 밀도·줄기 굽힘·깃털 세 갈래 |
+| `negative-cut` | 인장 원판 비율 | 씨앗을 evenodd로 파냄(진짜 구멍, 컷 깊이) |
+
+제작 규칙은 **게이트로 강제**한다(권고가 아니다):
+
+| 게이트 | 검사 |
+| --- | --- |
+| `candidate.palette_roles` | 색이 `ink`·`accent`·`paper` 셋뿐 |
+| `candidate.no_gradient` | 그라디언트·마스크·url(#) 0개 |
+| `candidate.stroke_scale` | 모든 `stroke-width`가 같은 기준의 1.0/1.5/2.0 배율 |
+| `candidate.optical_overshoot` | 원형 반지름에 0.4~2.0% 오버슈트, 링마다 적용 |
+| `candidate.counters_16` | 카운터가 16px에서 0.75px 이상 열림 |
+| 기존 후보 게이트 | `brand.no_text`·`no_style`·`raster`·`palette`·`safe_area`·`single_color`·`legible_16` |
+
+- 후보는 HITL 전에 `candidate-contact.png`(종이 512 격자 + 다크 줄 + 실제 16px 줄,
+  후보별 한국어 메모)와 `gate-table.md`로 모인다.
+- **자동 선택 금지**: `BrandProfile.auto_select_allowed`가 refine에서 `False`라
+  `approval_status=approved`만으로는 고르지 않고 `awaiting_selection`에 머문다.
+  사람이 `selection`을 명시해야 팩이 만들어진다.
+- 팩은 explore와 같은 규격(`normalized`·`outlined`·`mark.pdf`·PNG 2000·JPG 90·
+  아이콘·락업)을 쓰되, 락업은 v2가 만든 마크 SVG를 그대로 앉힌다.
+
 

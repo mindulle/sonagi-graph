@@ -486,11 +486,19 @@ def gate_node(state: EntryState) -> Dict[str, Any]:
 
 
 def hitl_node(state: EntryState) -> Dict[str, Any]:
-    """사람이 고른다. selection이 비어 있으면 상위 3개를 쓴다."""
+    """사람이 고른다. selection이 비어 있으면 상위 3개를 쓴다.
+
+    단, profile이 `auto_select_allowed(spec)`로 자동 선택을 막으면(refine) 승인만
+    으로는 고르지 않고 `awaiting_selection`에 머문다 — 사람이 후보를 골라야 한다.
+    """
     if state.get("approval_status") == "approved" and state.get("selection"):
         return {"status": "selected"}
     options = state.get("options") or []
-    if state.get("approval_status") == "approved" and options:
+    spec = state.get("spec") or {}
+    profile = profiles_base.profile_for_spec(spec)
+    hook = getattr(profile, "auto_select_allowed", None)
+    allow_auto = bool(hook(spec)) if callable(hook) else True
+    if state.get("approval_status") == "approved" and options and allow_auto:
         # 게이트 실패 후보는 자동 선택에서 뺀다. explore는 킷을 후보 하나로만
         # 만들므로 첫 통과 후보 하나를 고른다.
         passing = [
