@@ -75,7 +75,10 @@ from graphs.core import env as core_env  # noqa: E402
 from graphs.core import exec as core_exec  # noqa: E402
 from graphs.llm import chat_model  # noqa: E402
 from graphs.profiles import base as profiles_base  # noqa: E402
-from graphs.profiles import presets as profile_presets  # noqa: E402
+from graphs.profiles import presets as profile_presets
+from graphs.taste import ledger as taste_ledger
+from graphs.taste import profile as taste_profile
+from graphs.taste import rank as taste_rank  # noqa: E402
 from graphs.profiles.base import svg_size as _svg_size  # noqa: E402
 from graphs.profiles.base import svg_width as _svg_width  # noqa: E402
 from graphs.profiles.web import WebProfile  # noqa: E402
@@ -111,6 +114,9 @@ class EntryState(TypedDict, total=False):
     timings: Dict[str, float]
     critiques: List[Dict[str, Any]]
     options: List[Dict[str, Any]]
+    taste_profile: Dict[str, Any]
+    taste_ab: Dict[str, Any]
+    taste_explanations: List[str]
     selection: List[str]
     approval_status: str  # "pending" | "approved"
     entry: Dict[str, Any]
@@ -482,7 +488,24 @@ def gate_node(state: EntryState) -> Dict[str, Any]:
         for key in ("family", "seed", "gate_summary", "gates", "candidate"):
             if key in render:
                 option[key] = render[key]
-    return {"options": options, "status": "gated"}
+
+    t_profile = state.get("taste_profile") or spec.get("taste_profile")
+    if t_profile is None:
+        t_profile = taste_profile.load_profile(create=False)
+    t_decisions = (
+        taste_ledger.read_decisions()
+        if state.get("taste_profile") is None and spec.get("taste_profile") is None
+        else []
+    )
+    ranked = taste_rank.rank_top_options(
+        options, profile=t_profile, decisions=t_decisions
+    )
+    return {
+        "options": ranked["options"],
+        "taste_ab": ranked["ab"],
+        "taste_explanations": ranked["explanations"],
+        "status": "gated",
+    }
 
 
 def hitl_node(state: EntryState) -> Dict[str, Any]:
@@ -492,7 +515,12 @@ def hitl_node(state: EntryState) -> Dict[str, Any]:
     으로는 고르지 않고 `awaiting_selection`에 머문다 — 사람이 후보를 골라야 한다.
     """
     if state.get("approval_status") == "approved" and state.get("selection"):
-        return {"status": "selected"}
+        out: Dict[str, Any] = {"status": "selected"}
+        if state.get("taste_ab"):
+            out["taste_ab"] = taste_rank.evaluate_top3_agreement(
+                state["taste_ab"], state["selection"]
+            )
+        return out
     options = state.get("options") or []
     spec = state.get("spec") or {}
     profile = profiles_base.profile_for_spec(spec)
@@ -525,7 +553,12 @@ def hitl_node(state: EntryState) -> Dict[str, Any]:
                 break
         if not picked:
             picked = [o["id"] for o in candidates[:limit]]
-        return {"selection": picked, "status": "selected"}
+        out_auto: Dict[str, Any] = {"selection": picked, "status": "selected"}
+        if state.get("taste_ab"):
+            out_auto["taste_ab"] = taste_rank.evaluate_top3_agreement(
+                state["taste_ab"], picked
+            )
+        return out_auto
     return {"approval_status": "pending", "status": "awaiting_selection"}
 
 
