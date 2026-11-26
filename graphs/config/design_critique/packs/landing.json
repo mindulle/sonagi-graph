@@ -1,0 +1,25 @@
+{
+  "pack_id": "landing",
+  "description": "랜딩/상세페이지 자산 전용 보조 판정 축",
+  "mode": "axes",
+  "axes": [
+    {
+      "id": "copy_hierarchy",
+      "label": "카피 위계",
+      "layer": "pack",
+      "rubric": "헤드라인, 서브카피, 본문의 정보 위계와 시선 흐름이 명확한 쪽을 선택한다."
+    },
+    {
+      "id": "states",
+      "label": "상태(모바일·로딩)",
+      "layer": "pack",
+      "rubric": "모바일 반응형 전환, 로딩/빈 상태 등 다양한 UI 상태 대응이 더 견고한 쪽을 선택한다."
+    },
+    {
+      "id": "cta",
+      "label": "CTA",
+      "layer": "pack",
+      "rubric": "핵심 행동 유도(CTA)의 시인성, 문구 명확성, 배치 설득력이 더 높은 쪽을 선택한다."
+    }
+  ]
+}

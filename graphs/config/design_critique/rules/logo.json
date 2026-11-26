@@ -1,0 +1,30 @@
+{
+  "asset_type": "logo",
+  "rules": [
+    {
+      "id": "logo_vector_source",
+      "field": "format",
+      "op": "in",
+      "value": [
+        "svg",
+        "ai",
+        "eps",
+        "pdf"
+      ],
+      "when_present": true,
+      "severity": "major",
+      "location": "vector_source",
+      "fix": "로고 원본을 벡터 포맷(SVG/AI/EPS/PDF)으로 교체하세요."
+    },
+    {
+      "id": "logo_min_size",
+      "field": "min_size_px",
+      "op": "gte",
+      "value": 16,
+      "when_present": true,
+      "severity": "minor",
+      "location": "favicon_scale",
+      "fix": "파비콘 최소 크기(16px) 이상에서 식별 가능하도록 선 두께를 보강하세요."
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "pack_id": "logo",
+  "description": "로고 자산 전용 보조 판정 축",
+  "mode": "axes",
+  "axes": [
+    {
+      "id": "logotype",
+      "label": "로고타입",
+      "layer": "pack",
+      "rubric": "심볼과 워드마크(로고타입)의 자간, 커닝, 무게 중심 및 조화를 비교한다."
+    },
+    {
+      "id": "small_scale_legibility",
+      "label": "축소 재현성",
+      "layer": "pack",
+      "rubric": "파비콘(16px~32px) 등 극소 크기로 축소했을 때 획 뭉침 없이 형태가 식별되는지 비교한다."
+    },
+    {
+      "id": "system_extension",
+      "label": "시스템 확장",
+      "layer": "pack",
+      "rubric": "단색, 반전, 굿즈, 디지털 UI 등 다양한 매체로 확장했을 때 일관되게 작동하는지 비교한다."
+    }
+  ]
+}

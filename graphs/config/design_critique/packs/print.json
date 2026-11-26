@@ -1,0 +1,6 @@
+{
+  "pack_id": "print",
+  "description": "인쇄 자산은 판정 축을 두지 않고 규칙 층(도련·CMYK·평량)에서 처리한다",
+  "mode": "rules_only",
+  "axes": []
+}
