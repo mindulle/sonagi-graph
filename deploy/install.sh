@@ -3,7 +3,8 @@
 #
 #   1) ubuntu 사용자로 gh 인증 / 릴리스 목록 / git fetch / zstd / 디스크 여유 확인
 #   2) ubuntu 사용자로 deploy 스크립트 --check (최신 image-* 태그 비교)
-#   3) 모두 성공했을 때만 systemd 유닛을 복사하고 타이머를 켠다.
+#   3) 배포 스크립트/상태 헬퍼를 /usr/local/lib/sonagi-graph-deploy 에 안정 사본으로 설치
+#   4) 모두 성공했을 때만 systemd 유닛을 복사하고 타이머를 켠다.
 #
 # GHCR 로그인은 하지 않는다. 기존 repo-scoped gh 토큰으로 릴리스 자산을 받는다.
 # 하나라도 실패하면 유닛을 건드리지 않는다.
@@ -21,6 +22,7 @@ GITHUB_REPO="${SONAGI_GRAPH_GITHUB_REPO:-mindulle/sonagi-graph}"
 GIT_BRANCH="${SONAGI_GRAPH_BRANCH:-master}"
 ASSET_NAME="${SONAGI_GRAPH_ASSET:-graph-image.tar.zst}"
 UNIT_DIR="/etc/systemd/system"
+TOOL_DIR="/usr/local/lib/sonagi-graph-deploy"
 TIMER="sonagi-graph-deploy.timer"
 SERVICE="sonagi-graph-deploy.service"
 PYTHON="${PYTHON:-python3}"
@@ -172,7 +174,15 @@ if [ "$AVAIL_KB" -lt "$NEED_KB" ]; then
   exit 1
 fi
 
-# 4) 유닛 설치. 여기까지 왔으면 gh/릴리스/zstd/디스크가 검증됐다.
+# 4) 안정 실행 사본. 배포 클론은 배포 중 태그 커밋으로 체크아웃되므로, 유닛이
+# 클론 안 스크립트를 직접 실행하면 다음 회차가 이전 커밋의 낡은 스크립트로
+# 시작할 수 있다(실제로 2026-11-26 07:45에 그렇게 실패했다).
+log "배포 도구 설치: $TOOL_DIR"
+install -d -m 0755 "$TOOL_DIR"
+install -m 0755 "$SCRIPT_DIR/sonagi-graph-deploy.sh" "$TOOL_DIR/sonagi-graph-deploy.sh"
+install -m 0644 "$SCRIPT_DIR/deploy_state.py" "$TOOL_DIR/deploy_state.py"
+
+# 5) 유닛 설치. 여기까지 왔으면 gh/릴리스/git/zstd/디스크/도구가 검증됐다.
 log "systemd 유닛 복사: $UNIT_DIR"
 install -m 0644 "$SCRIPT_DIR/$SERVICE" "$UNIT_DIR/$SERVICE"
 install -m 0644 "$SCRIPT_DIR/$TIMER" "$UNIT_DIR/$TIMER"

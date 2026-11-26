@@ -11,10 +11,13 @@ User=ubuntu
 # (/home/ubuntu/sonagi-graph)은 배포가 건드리지 않는다.
 WorkingDirectory=/home/ubuntu/sonagi-graph-deploy
 Environment=SONAGI_GRAPH_REPO=/home/ubuntu/sonagi-graph-deploy
+# 배포 스크립트는 클론 밖의 안정 사본에서 실행한다. 배포가 클론을 이전
+# 커밋으로 체크아웃해도 다음 회차가 낡은 스크립트로 시작하지 않는다.
+# (install.sh가 /usr/local/lib/sonagi-graph-deploy 에 복사한다.)
 # langgraph CLI는 ~/.local/bin에 있다. systemd 기본 PATH에는 없으므로 명시한다.
 Environment=HOME=/home/ubuntu
 Environment=PATH=/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=/home/ubuntu/sonagi-graph-deploy/deploy/sonagi-graph-deploy.sh
+ExecStart=/usr/local/lib/sonagi-graph-deploy/sonagi-graph-deploy.sh
 TimeoutStartSec=900
 Nice=10
 SyslogIdentifier=sonagi-graph-deploy
