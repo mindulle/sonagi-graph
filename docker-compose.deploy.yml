@@ -6,13 +6,19 @@
 #
 # 컨테이너는 이 호스트의 다음 자원을 쓴다:
 #   - llm-wiki            검증 리포트·지식 카탈로그 저장
-#   - sonagi-assets       브랜드 토큰·에셋 카탈로그 (brand.py)
+#   - sonagi-assets       브랜드 토큰·카탈로그 (brand.py, entry_pack 레퍼런스)
 #   - /home/ubuntu/entry_pack  entry_pack 산출물(호스트에서 바로 열람)
 #   - 로컬 폰트           ~/.local/share/fonts (브랜드 아웃라인 폰트)
 #   - MDS tokens          design_token_sync 정본
 #   - craft CLIs          video_ops / design_ops / asset_craft
 #   - /var/www/craft-suite  video_ops CDN 배포
 #   - SearXNG (:8080)     source_verification
+#
+# 웹 렌더(entry_pack web)는 devops에서 돈다. 자산 라이브러리(7.2GB)는 이 호스트에
+# 두지 않는다. `graphs/adapters/remote_assets.py`가 scripts·styles·tokens·rules만
+# devops:/home/ubuntu/sonagi-entry-render 로 동기화하고, 카탈로그·라이브러리는
+# devops의 /srv/sonagi-assets 를 그대로 쓴다. mcp-gateway가 rsync --delete로 쓰는
+# /home/ubuntu/sonagi-render 와는 **다른** 디렉터리다.
 
 services:
   langgraph-api:
@@ -34,6 +40,11 @@ services:
       - /usr/local/bin/vectorcraft-cli:/usr/local/bin/vectorcraft-cli:ro
       - /tmp/video_ops:/tmp/video_ops
       - /tmp/package_delivery:/tmp/package_delivery
+      # devops 원격 렌더 전용 키. 일반 ~/.ssh는 마운트하지 않는다(최소 권한).
+      # config는 ~/.ssh/sonagi_render_config, known_hosts는 전용 파일 하나뿐이다.
+      - /home/ubuntu/.ssh/sonagi_render_ed25519:/root/.ssh/sonagi_render_ed25519:ro
+      - /home/ubuntu/.ssh/sonagi_render_config:/root/.ssh/config:ro
+      - /home/ubuntu/.ssh/sonagi_render_known_hosts:/root/.ssh/sonagi_render_known_hosts:ro
     environment:
       # 호스트 서비스는 0.0.0.0에 바인딩되어 있다. Docker 브릿지 IP로 접근한다.
       OPENAI_API_BASE: http://172.19.0.1:38107/v1
@@ -46,6 +57,13 @@ services:
       # 경로가 호스트에서도 그대로 열려야 `graph_cli show`가 읽을 수 있다.
       # (/tmp/entry_pack 마운트는 /tmp를 하드코딩한 옛 호출부용으로 남긴다)
       SONAGI_ENTRY_OUT: /home/ubuntu/entry_pack
+      # 웹 렌더는 devops에서. 카탈로그는 원격 절대경로(/srv)를 그대로 쓴다.
+      SONAGI_REMOTE_RENDER: "1"
+      SONAGI_RENDER_HOST: devops-render
+      SONAGI_RENDER_ROOT: /home/ubuntu/sonagi-entry-render
+      SONAGI_RENDER_CATALOG: /srv/sonagi-assets/catalog/catalog.json
+      SONAGI_RENDER_SSH_CONFIG: /root/.ssh/config
+      SONAGI_RENDER_TIMEOUT: "300"
       SONAGI_WIKI_DIR: /home/ubuntu/llm-wiki
       SONAGI_CDN_VIDEO_DIR: /var/www/craft-suite/video/exports
       MDS_TOKENS_DIR: /home/ubuntu/mindulle-design-system/packages/tokens

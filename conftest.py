@@ -31,6 +31,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _local_render_default(monkeypatch):
+    """테스트는 ssh·devops 없이 돈다. 원격 렌더는 개별 테스트가 켠다."""
+    monkeypatch.setenv("SONAGI_REMOTE_RENDER", "0")
+
+
 # ---------------------------------------------------------------- 네트워크 차단
 
 

@@ -16,5 +16,8 @@
     "source_verification": "./graphs/source_verification_graph.py:graph",
     "entry_pack": "./graphs/entry_pack_graph.py:graph"
   },
+  "dockerfile_lines": [
+    "RUN apt-get update && apt-get install -y --no-install-recommends openssh-client rsync && rm -rf /var/lib/apt/lists/*"
+  ],
   "python_version": "3.11"
 }
