@@ -433,3 +433,25 @@ def test_no_subprocess_in_design_critique():
         {"id": "repo", "source_files": files}, "repo", ruleset
     )
     assert findings == []
+
+
+def test_false_positive_tuning_autofocus_and_stop_propagation():
+    """오탐 보강: TS autoFocus?: boolean 타입 선언과 stopPropagation 래퍼 div는 발견하지 않는다."""
+    from pathlib import Path
+    from graphs.design_critique_rules import evaluate_ruleset_for_candidate
+
+    rules_dir = Path(mod.DEFAULT_CONFIG_DIR) / "rules"
+    landing = json.loads((rules_dir / "landing.json").read_text(encoding="utf-8"))
+    candidate = {
+        "id": "A",
+        "source_files": {
+            "components/SearchBar.tsx": "type Props = { autoFocus?: boolean; };\nexport function SearchBar({ autoFocus }: Props) { return <input autoFocus={false} />; }",
+            "components/Row.tsx": '<div onClick={(e) => e.stopPropagation()}><button type="button">Copy</button></div>',
+        },
+    }
+    findings, _ = evaluate_ruleset_for_candidate(
+        candidate, "candidate_a", landing, rules_dir=rules_dir
+    )
+    rule_ids = {f.get("rule_id") for f in findings}
+    assert "a11y.autofocus.prop" not in rule_ids
+    assert "a11y.click.div" not in rule_ids

@@ -264,6 +264,11 @@
           "glob": "**/*.stories.*",
           "reason": "스토리북 데모 파일 면제",
           "basis": "jakub-ruleset.draft.json scope.exclude"
+        },
+        {
+          "glob": "**/JambotQuickGestures.tsx",
+          "reason": "캔버스 목업 HTML 문자열 템플릿 생성기",
+          "basis": "sonagi-draw 오탐 표본 점검"
         }
       ]
     },
@@ -408,6 +413,11 @@
           "glob": "**/*.stories.*",
           "reason": "스토리북 데모 파일 면제",
           "basis": "jakub-ruleset.draft.json scope.exclude"
+        },
+        {
+          "glob": "**/JambotQuickGestures.tsx",
+          "reason": "캔버스 목업 HTML 문자열 템플릿 생성기",
+          "basis": "sonagi-draw 오탐 표본 점검"
         }
       ]
     },
@@ -464,6 +474,11 @@
           "glob": "**/*.stories.*",
           "reason": "스토리북 데모 파일 면제",
           "basis": "jakub-ruleset.draft.json scope.exclude"
+        },
+        {
+          "glob": "**/JambotQuickGestures.tsx",
+          "reason": "캔버스 목업 HTML 문자열 템플릿 생성기",
+          "basis": "sonagi-draw 오탐 표본 점검"
         }
       ]
     },
@@ -546,6 +561,11 @@
           "glob": "**/*.stories.*",
           "reason": "스토리북 데모 파일 면제",
           "basis": "jakub-ruleset.draft.json scope.exclude"
+        },
+        {
+          "glob": "**/JambotQuickGestures.tsx",
+          "reason": "캔버스 목업 HTML 문자열 템플릿 생성기",
+          "basis": "sonagi-draw 오탐 표본 점검"
         }
       ]
     },
@@ -728,7 +748,7 @@
         "**/*.js"
       ],
       "pattern": "<(?:div|span)\\b[^>]*\\bonClick=",
-      "line_negate": "onKeyDown|onKeyUp|role=",
+      "line_negate": "onKeyDown|onKeyUp|role=|stopPropagation",
       "context_lines": 2,
       "jakub_severity": "HIGH",
       "source": "better-accessibility / Native elements first",
@@ -974,7 +994,8 @@
           "reason": "스토리북 데모 파일 면제",
           "basis": "jakub-ruleset.draft.json scope.exclude"
         }
-      ]
+      ],
+      "line_negate": "autoFocus\\s*\\??:\\s*boolean|autoFocus=\\{false\\}"
     },
     {
       "id": "a11y.target.blank.rel",
@@ -1027,6 +1048,11 @@
           "glob": "**/canvas/**",
           "reason": "전체화면 캔버스 뷰포트는 스크롤바를 숨김",
           "basis": "jakub-ruleset.draft.json"
+        },
+        {
+          "glob": "**/ErrorBoundary.tsx",
+          "reason": "치명적 에러 폴백 전체 화면 컨테이너",
+          "basis": "sonagi-draw 오탐 표본 점검"
         }
       ]
     },
@@ -1058,6 +1084,11 @@
           "glob": "**/*.stories.*",
           "reason": "스토리북 데모 파일 면제",
           "basis": "jakub-ruleset.draft.json scope.exclude"
+        },
+        {
+          "glob": "**/ErrorBoundary.tsx",
+          "reason": "치명적 에러 폴백 전체 화면 컨테이너",
+          "basis": "sonagi-draw 오탐 표본 점검"
         }
       ]
     },
