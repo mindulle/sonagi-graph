@@ -274,3 +274,162 @@ def test_configurable_model_prompt_and_material_index(install_stub, tmp_path):
     assert all(c["model_name"] == "custom-critique-model" for c in captured["calls"])
     assert any("CUSTOM_PROMPT" in p for p in seen_prompts)
     assert any("여백 참고" in p for p in seen_prompts)
+
+
+def test_rules_schema_and_40_plus_executable_rules():
+    """GRAPH-48: 실행 가능 규칙 40개 이상, checkable_by/exceptions 필수, severity_map.json 데이터화."""
+    from pathlib import Path
+    from graphs.design_critique_rules import (
+        VALID_CHECKABLE_BY,
+        VALID_RULE_KINDS,
+        load_severity_map,
+        normalize_rule_kind,
+        resolve_severity,
+    )
+
+    rules_dir = Path(mod.DEFAULT_CONFIG_DIR) / "rules"
+    sev_map = load_severity_map(rules_dir)
+    assert sev_map["map"]["HIGH"] == "blocker"
+    assert sev_map["map"]["MEDIUM"] == "major"
+    assert sev_map["map"]["LOW"] == "minor"
+
+    landing = json.loads((rules_dir / "landing.json").read_text(encoding="utf-8"))
+    executable = [
+        r for r in landing["rules"] if r.get("checkable_by") in ("grep", "ast", "token")
+    ]
+    assert len(executable) >= 40, f"Expected >= 40 executable rules, got {len(executable)}"
+
+    for fname in ("landing.json", "logo.json", "print.json"):
+        data = json.loads((rules_dir / fname).read_text(encoding="utf-8"))
+        for rule in data["rules"]:
+            assert normalize_rule_kind(rule) in VALID_RULE_KINDS
+            assert rule.get("checkable_by") in VALID_CHECKABLE_BY
+            assert isinstance(rule.get("exceptions"), list)
+            for exc in rule["exceptions"]:
+                assert "glob" in exc and "reason" in exc and "basis" in exc
+            assert resolve_severity(rule, sev_map) in ("blocker", "major", "minor")
+
+
+def test_backward_compat_attribute_rule_without_kind():
+    """kind가 없는 기존 attribute 룰셋도 하위 호환되어 정상 평가된다."""
+    from graphs.design_critique_rules import evaluate_ruleset_for_candidate
+
+    legacy_ruleset = {
+        "asset_type": "legacy",
+        "rules": [
+            {
+                "id": "legacy_bleed",
+                "field": "bleed_mm",
+                "op": "gte",
+                "value": 3,
+                "when_present": False,
+                "severity": "blocker",
+                "location": "bleed",
+                "fix": "도련 3mm 필요",
+            }
+        ],
+    }
+    findings, not_verified = evaluate_ruleset_for_candidate(
+        {"id": "A", "bleed_mm": 1}, "candidate_a", legacy_ruleset
+    )
+    assert len(findings) == 1
+    assert findings[0]["severity"] == "blocker"
+    assert findings[0]["location"] == "candidate_a:bleed"
+    assert not_verified == []
+
+
+def test_render_and_human_rules_separated_into_not_verified(install_stub):
+    """render·human 규칙은 실행하지 않고 not_verified로 분리하며 findings에 넣지 않는다."""
+    install_stub(lambda _ax, swapped, _pv: ("A" if swapped else "B", []))
+
+    result = mod.graph.invoke(
+        {
+            "brief": "랜딩 리뷰",
+            "asset_type": "landing",
+            "candidate_a": {
+                "id": "A",
+                "source_files": {"app/page.tsx": "<main><h1>Hello</h1></main>"},
+            },
+            "candidate_b": {
+                "id": "B",
+                "source_files": {"app/page.tsx": "<main><h1>World</h1></main>"},
+            },
+        }
+    )
+
+    out = result["output"]
+    _assert_no_numeric_scores(out)
+    not_verified = out["rules"]["not_verified"]
+    assert len(not_verified) > 0
+    assert all(item["checkable_by"] in ("render", "human") for item in not_verified)
+    finding_locs = [f["location"] for f in out["rules"]["findings"]]
+    assert not any("render." in loc or "human." in loc for loc in finding_locs)
+
+
+def test_source_rules_grep_ast_token_and_exceptions(tmp_path):
+    """grep/ast/token 규칙 평가와 exceptions(path glob) 면제 동작을 검증한다."""
+    from pathlib import Path
+    from graphs.design_critique_rules import evaluate_ruleset_for_candidate
+
+    rules_dir = Path(mod.DEFAULT_CONFIG_DIR) / "rules"
+    landing = json.loads((rules_dir / "landing.json").read_text(encoding="utf-8"))
+
+    candidate = {
+        "id": "A",
+        "source_files": {
+            "app/Bad.tsx": '<div onClick={() => {}} className="transition-all"></div>',
+            "app/Exempted.test.tsx": '<div onClick={() => {}} className="transition-all"></div>',
+            "app/icons/libraryIcons.tsx": '<svg><path fill="#ff0000" /></svg>',
+            "app/icons/bad.svg": '<svg><path fill="#123456" /></svg>',
+            "app/tokens/theme.css": ":root { --accent: oklch(65% 0.2 250); --error: oklch(60% 0.2 255); --text: #777777; --bg: #888888; }",
+        },
+    }
+
+    findings, not_verified = evaluate_ruleset_for_candidate(
+        candidate, "candidate_a", landing, rules_dir=rules_dir
+    )
+    locs = [f["location"] for f in findings]
+    rule_ids = {f.get("rule_id") for f in findings}
+
+    assert "a11y.click.div" in rule_ids
+    assert "motion.transition.all" in rule_ids
+    assert "ui.svg.hardcoded.ast" in rule_ids
+    assert "ui.svg.viewbox.ast" in rule_ids
+    assert "color.token.oklch.hue_collision" in rule_ids
+    assert "color.token.contrast.aa" in rule_ids
+
+    # exceptions에 걸린 파일은 발견을 만들지 않는다.
+    assert not any("Exempted.test.tsx" in loc for loc in locs)
+    assert not any("libraryIcons.tsx" in loc for loc in locs)
+    assert len(not_verified) == 12
+
+
+def test_no_subprocess_in_design_critique():
+    """subprocess 0 원칙: design_critique_graph와 design_critique_rules는 subprocess를 import하지 않는다."""
+    from pathlib import Path
+    from graphs.design_critique_rules import evaluate_ruleset_for_candidate
+
+    root = Path(__file__).resolve().parent
+    ruleset = {
+        "asset_type": "py_check",
+        "rules": [
+            {
+                "id": "no_subprocess",
+                "kind": "source",
+                "checkable_by": "ast",
+                "ast_check": "no_subprocess",
+                "path_globs": ["**/*.py"],
+                "severity": "blocker",
+                "fix": "subprocess 사용 금지",
+                "exceptions": [],
+            }
+        ],
+    }
+    files = {
+        "graphs/design_critique_graph.py": (root / "graphs" / "design_critique_graph.py").read_text(encoding="utf-8"),
+        "graphs/design_critique_rules.py": (root / "graphs" / "design_critique_rules.py").read_text(encoding="utf-8"),
+    }
+    findings, _ = evaluate_ruleset_for_candidate(
+        {"id": "repo", "source_files": files}, "repo", ruleset
+    )
+    assert findings == []

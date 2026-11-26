@@ -1,24 +1,1675 @@
 {
   "asset_type": "landing",
+  "version": "1.0.0",
+  "source": {
+    "repo": "https://github.com/jakubkrehel/skills",
+    "commit": "672ae44ace6aaed65b86cbb1e2fd6fbea0e79578",
+    "license": "MIT"
+  },
+  "scope": {
+    "exclude": [
+      "**/node_modules/**",
+      "**/.next/**",
+      "**/dist/**",
+      "**/out/**",
+      "**/*.min.*",
+      "**/scripts/**",
+      "**/figma-automation/**",
+      "**/makereal.ts",
+      "**/apps/obsidian-plugin/main.js"
+    ]
+  },
   "rules": [
     {
       "id": "landing_layout_grid",
+      "kind": "attribute",
+      "checkable_by": "token",
       "field": "layout_grid",
       "op": "truthy",
       "when_present": true,
-      "severity": "major",
+      "jakub_severity": "MEDIUM",
       "location": "layout_grid",
-      "fix": "랜딩 페이지의 컬럼 그리드와 반응형 브레이크포인트 규격을 명시하세요."
+      "fix": "랜딩 페이지의 컬럼 그리드와 반응형 브레이크포인트 규격을 명시하세요.",
+      "exceptions": []
     },
     {
       "id": "landing_mobile_viewport",
+      "kind": "attribute",
+      "checkable_by": "token",
       "field": "mobile_ready",
       "op": "eq",
       "value": true,
       "when_present": true,
-      "severity": "major",
+      "jakub_severity": "MEDIUM",
       "location": "mobile_viewport",
-      "fix": "모바일 뷰포트(375px 기준) 레이아웃 깨짐을 수정하세요."
+      "fix": "모바일 뷰포트(375px 기준) 레이아웃 깨짐을 수정하세요.",
+      "exceptions": []
+    },
+    {
+      "id": "type.lineheight.unit",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.css",
+        "**/*.scss",
+        "**/*.tsx",
+        "**/*.jsx"
+      ],
+      "pattern": "line-height:\\s*[\\d.]+(px|rem)\\b",
+      "jakub_severity": "MEDIUM",
+      "source": "better-typography / Line-height by role",
+      "fix": "line-height를 단위 없는 비율(예: 1.5, 1.6)로 바꾸세요.",
+      "exceptions": [
+        {
+          "glob": "**/icon*.*",
+          "reason": "아이콘 버튼처럼 한 줄 고정 높이를 의도한 경우",
+          "basis": "jakub-ruleset.draft.json"
+        }
+      ]
+    },
+    {
+      "id": "type.tracking.unit",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.css",
+        "**/*.scss",
+        "**/*.tsx",
+        "**/*.jsx"
+      ],
+      "pattern": "letter-spacing:\\s*-?[\\d.]+px\\b",
+      "jakub_severity": "MEDIUM",
+      "source": "better-typography / Letter-spacing by size",
+      "fix": "letter-spacing을 px 대신 em 단위(-0.01em 등)로 바꾸세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "type.fontsize.unit",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.css",
+        "**/*.scss",
+        "**/*.tsx",
+        "**/*.jsx"
+      ],
+      "pattern": "font-size:\\s*(1[2-9]|2\\d)px\\b",
+      "jakub_severity": "MEDIUM",
+      "source": "better-typography / Size floors",
+      "fix": "본문·UI font-size는 사용자 브라우저 설정을 따르도록 rem 단위로 바꾸세요.",
+      "exceptions": [
+        {
+          "glob": "**/opengraph-image.*",
+          "reason": "OG 이미지 서버 렌더는 고정 px 캔버스를 사용",
+          "basis": "Next.js ImageResponse 제약"
+        },
+        {
+          "glob": "**/icon.tsx",
+          "reason": "파비콘/앱 아이콘 생성기는 고정 px 필요",
+          "basis": "Next.js app/icon.tsx 스펙"
+        }
+      ]
+    },
+    {
+      "id": "type.weight.floor",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js",
+        "**/*.css",
+        "**/*.scss",
+        "**/*.html"
+      ],
+      "pattern": "font-weight:\\s*(100|200|300)\\b|\\bfont-(thin|extralight|light)\\b",
+      "jakub_severity": "MEDIUM",
+      "source": "better-typography / Fewer fonts, sizes and weights",
+      "fix": "18px 미만 텍스트에는 font-weight 400 이상을 사용하세요.",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "type.feature.prop",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.css",
+        "**/*.scss",
+        "**/*.tsx",
+        "**/*.jsx"
+      ],
+      "pattern": "font-(feature|variation)-settings:.*(\"tnum\"|\"wght\"|\"zero\")",
+      "jakub_severity": "MEDIUM",
+      "source": "better-typography / Properties over raw tags",
+      "fix": "raw font-feature/variation-settings 대신 font-variant-numeric: tabular-nums 또는 font-weight를 쓰세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "type.wrap.balance",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js",
+        "**/*.css",
+        "**/*.scss",
+        "**/*.html"
+      ],
+      "pattern": "text-wrap:\\s*balance|\\btext-balance\\b",
+      "line_negate": "<h[1-6]\\b|heading|title",
+      "jakub_severity": "LOW",
+      "source": "better-typography / Wrap deliberately",
+      "fix": "긴 문단에는 text-balance 대신 text-pretty(text-wrap: pretty)를 쓰세요.",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "type.clamp.deps",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.css",
+        "**/*.scss",
+        "**/*.tsx",
+        "**/*.jsx"
+      ],
+      "pattern": "-webkit-line-clamp",
+      "negate": "-webkit-box",
+      "jakub_severity": "HIGH",
+      "source": "better-typography / Truncate with a way back",
+      "fix": "raw -webkit-line-clamp 사용 시 display: -webkit-box와 -webkit-box-orient: vertical을 함께 선언하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "type.input.fontsize",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": "<(?:input|textarea|select)\\b[^>]*text-(?:xs|sm)\\b",
+      "jakub_severity": "HIGH",
+      "source": "better-typography / Input size floor",
+      "fix": "모바일 iOS 자동 줌 방지를 위해 입력 필드는 최소 16px(text-base) 이상을 유지하세요.",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "type.justify.app",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js",
+        "**/*.css",
+        "**/*.scss",
+        "**/*.html"
+      ],
+      "pattern": "text-align:\\s*justify|\\btext-justify\\b",
+      "jakub_severity": "MEDIUM",
+      "source": "better-typography / Alignment",
+      "fix": "웹 UI에서 양쪽 정렬(text-justify)은 강물 현상을 유발하므로 text-left로 바꾸세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "type.leading.tight.body",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": "<p\\b[^>]*\\bleading-(?:none|tight)\\b",
+      "jakub_severity": "MEDIUM",
+      "source": "better-typography / Line-height by role",
+      "fix": "본문 <p>에는 leading-normal 또는 leading-relaxed(1.5~1.65)를 사용하세요.",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "type.font.antialiased.subpixel",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.css",
+        "**/*.scss",
+        "**/*.tsx",
+        "**/*.jsx"
+      ],
+      "pattern": "-webkit-font-smoothing:\\s*subpixel-antialiased",
+      "jakub_severity": "LOW",
+      "source": "better-typography / Font smoothing",
+      "fix": "macOS 레티나 디스플레이 본문은 antialiased 또는 기본값을 유지하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "type.allcaps.tracking",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": "\\buppercase\\b",
+      "line_negate": "tracking-",
+      "jakub_severity": "LOW",
+      "source": "better-typography / Letter-spacing by size",
+      "fix": "대문자(uppercase) 라벨에는 자간(tracking-wider 등)을 추가해 가독성을 확보하세요.",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "motion.transition.all",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js",
+        "**/*.css",
+        "**/*.scss",
+        "**/*.html"
+      ],
+      "pattern": "\\btransition-all\\b|transition:\\s*all\\b",
+      "jakub_severity": "MEDIUM",
+      "source": "better-motion / Transition only what changes",
+      "fix": "transition-all 대신 변경되는 속성만 지정하세요(transition-colors, transition-transform).",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "motion.bounce.nonzero",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": "bounce:\\s*(?!0(?:\\.0+)?\\b)[0-9.]+",
+      "jakub_severity": "LOW",
+      "source": "better-motion / Springs take a duration and no bounce",
+      "fix": "UI 스프링 트랜지션은 bounce: 0으로 두고 duration으로 무게감을 조절하세요.",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "motion.press.scale",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": "\\bscale-(?:75|90|95)\\b|whileTap=\\{?[^}]*scale:\\s*0\\.[0-8]",
+      "jakub_severity": "MEDIUM",
+      "source": "better-motion / Press scales to 0.96",
+      "fix": "누름 피드백 scale은 과도한 축소를 피해 0.96(scale-[0.96]) 기준으로 통일하세요.",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "motion.willchange.broad",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.css",
+        "**/*.scss",
+        "**/*.tsx",
+        "**/*.jsx"
+      ],
+      "pattern": "will-change:\\s*all\\b",
+      "jakub_severity": "MEDIUM",
+      "source": "better-motion / will-change fixes a jump you have seen",
+      "fix": "will-change: all을 제거하고 실제 애니메이션하는 속성만 명시하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "motion.active.nodisabled",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.css",
+        "**/*.scss",
+        "**/*.tsx",
+        "**/*.jsx"
+      ],
+      "pattern": ":active\\b",
+      "line_negate": ":not\\(:disabled\\)|enabled:",
+      "jakub_severity": "LOW",
+      "source": "better-motion / Before you finish",
+      "fix": ":active 변형에는 :not(:disabled) 또는 enabled:active: 조건을 함께 쓰세요.",
+      "exceptions": [
+        {
+          "glob": "**/globals.css",
+          "reason": "전역 리셋/링크 스타일은 disabled 속성이 없는 요소 대상",
+          "basis": "CSS :disabled 명세"
+        }
+      ]
+    },
+    {
+      "id": "motion.reduced.transform",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js",
+        "**/*.css",
+        "**/*.scss",
+        "**/*.html"
+      ],
+      "pattern": "whileTap|whileHover|animate-(?:bounce|spin|pulse|ping)\\b",
+      "negate": "prefers-reduced-motion|useReducedMotion|MotionConfig|motion-safe:|motion-reduce:",
+      "jakub_severity": "HIGH",
+      "source": "better-accessibility / Honor prefers-reduced-motion",
+      "fix": "움직임/변형 모션에 prefers-reduced-motion, useReducedMotion 또는 motion-safe: 가드를 추가하세요.",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "motion.linear.easing",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.css",
+        "**/*.scss",
+        "**/*.tsx",
+        "**/*.jsx"
+      ],
+      "pattern": "transition(?:-timing-function)?:\\s*[^;]*\\blinear\\b|\\bease-linear\\b",
+      "jakub_severity": "MEDIUM",
+      "source": "better-motion / Natural easing",
+      "fix": "UI 전환에 linear 이징 대신 ease-out 또는 cubic-bezier(.16,1,.3,1)을 사용하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*marquee*.*",
+          "reason": "무한 루프 마키/로딩 스피너는 등속(linear)이 적절",
+          "basis": "better-motion / Continuous loop exception"
+        }
+      ]
+    },
+    {
+      "id": "motion.duration.excessive",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js",
+        "**/*.css",
+        "**/*.scss",
+        "**/*.html"
+      ],
+      "pattern": "\\bduration-(?:700|1000)\\b|transition-duration:\\s*(?:[6-9]\\d{2}|[1-9]\\d{3,})ms",
+      "jakub_severity": "MEDIUM",
+      "source": "better-motion / Keep UI transitions fast",
+      "fix": "인터랙티브 UI 전환 시간은 150~350ms 이내로 줄여 응답성을 유지하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "motion.animate.layout_prop",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.css",
+        "**/*.scss",
+        "**/*.tsx",
+        "**/*.jsx"
+      ],
+      "pattern": "transition(?:-property)?:\\s*[^;]*\\b(?:width|height|top|left|margin|padding)\\b",
+      "jakub_severity": "MEDIUM",
+      "source": "better-motion / Animate compositor properties",
+      "fix": "레이아웃 리플로우 속성(width/height/top/left) 대신 transform/opacity를 애니메이션하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "motion.drag.momentum",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": "dragSnapToOrigin",
+      "negate": "dragMomentum=\\{false\\}",
+      "jakub_severity": "LOW",
+      "source": "better-motion / Drag momentum on snap",
+      "fix": "스냅 드래그에는 dragMomentum={false}를 지정해 과도한 관성 튕김을 막으세요.",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "motion.opacity.zero_mount",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": "initial=\\{\\{[^}]*opacity:\\s*0",
+      "negate": "useReducedMotion|prefers-reduced-motion",
+      "jakub_severity": "MEDIUM",
+      "source": "better-motion / Reduced motion fallback",
+      "fix": "initial={{ opacity: 0 }} 마운트 애니메이션은 reduced-motion 환경에서 즉시 표시되도록 가드를 두세요.",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "a11y.focus.outline",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js",
+        "**/*.css",
+        "**/*.scss",
+        "**/*.html"
+      ],
+      "pattern": "\\boutline-none\\b|outline:\\s*none\\b",
+      "negate": "focus-visible|focus:ring",
+      "jakub_severity": "HIGH",
+      "source": "better-accessibility / Visible focus rings",
+      "fix": "outline-none 사용 시 반드시 focus-visible:ring 또는 대체 포커스 스타일을 함께 지정하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "a11y.click.div",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": "<(?:div|span)\\b[^>]*\\bonClick=",
+      "line_negate": "onKeyDown|onKeyUp|role=",
+      "context_lines": 2,
+      "jakub_severity": "HIGH",
+      "source": "better-accessibility / Native elements first",
+      "fix": "클릭 가능한 div/span 대신 네이티브 <button> 또는 <a href>를 사용하세요.",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "a11y.role.button.keydown",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": "role=[\"\\']button[\"\\']",
+      "line_negate": "onKeyDown|onKeyUp",
+      "context_lines": 3,
+      "jakub_severity": "HIGH",
+      "source": "better-accessibility / Full keyboard support",
+      "fix": "role=\"button\" 커스텀 요소에는 Enter/Space 키보드 핸들러(onKeyDown)를 추가하거나 <button>으로 교체하세요.",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "a11y.tabindex.positive",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js",
+        "**/*.css",
+        "**/*.scss",
+        "**/*.html"
+      ],
+      "pattern": "tabIndex=\\{?[1-9]|tabindex=[\\\"']?[1-9]",
+      "jakub_severity": "HIGH",
+      "source": "better-accessibility / Full keyboard support",
+      "fix": "양수 tabIndex를 제거하고 DOM 순서를 정리한 뒤 0 또는 -1만 사용하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "a11y.viewport.scale",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js",
+        "**/*.css",
+        "**/*.scss",
+        "**/*.html"
+      ],
+      "pattern": "maximum-scale=1\\b|user-scalable=no\\b",
+      "jakub_severity": "HIGH",
+      "source": "better-accessibility / Survive zoom and text resize",
+      "fix": "viewport 설정에서 maximum-scale=1 및 user-scalable=no를 제거해 핀치 줌을 허용하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "a11y.html.viewport.ast",
+      "kind": "source",
+      "checkable_by": "ast",
+      "ast_check": "html_viewport_no_scale",
+      "path_globs": [
+        "**/*.html"
+      ],
+      "jakub_severity": "HIGH",
+      "source": "better-accessibility / Survive zoom and text resize",
+      "fix": "HTML <meta name=\"viewport\">에서 확대 제한 속성을 제거하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "a11y.img.alt",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": "<img\\b",
+      "line_negate": "\\balt=",
+      "context_lines": 3,
+      "jakub_severity": "HIGH",
+      "source": "better-accessibility / Alt text by purpose",
+      "fix": "모든 <img>에 alt 속성을 추가하세요(장식용은 alt=\"\").",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        },
+        {
+          "glob": "**/sync-server/**",
+          "reason": "서버 생성 HTML 문자열 내 <img>는 런타임 맥락 확인 필요",
+          "basis": "Jakub 룰 이식 초안 3절"
+        }
+      ]
+    },
+    {
+      "id": "a11y.html.img.alt.ast",
+      "kind": "source",
+      "checkable_by": "ast",
+      "ast_check": "html_img_missing_alt",
+      "path_globs": [
+        "**/*.html"
+      ],
+      "jakub_severity": "HIGH",
+      "source": "better-accessibility / Alt text by purpose",
+      "fix": "HTML <img> 태그에 alt 속성을 추가하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "a11y.aria.assertive.toast",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": "aria-live=[\"\\']assertive[\"\\']",
+      "jakub_severity": "MEDIUM",
+      "source": "better-accessibility / Polite live regions",
+      "fix": "일반 알림·성공 토스트에는 aria-live=\"polite\"를 사용하세요(긴급 오류 제외).",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "a11y.autofocus.prop",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": "\\bautoFocus\\b|\\bautofocus\\b",
+      "jakub_severity": "LOW",
+      "source": "better-accessibility / Focus management",
+      "fix": "초기 로드 시 autoFocus는 스크린리더 문맥을 끊으므로 모달/검색 열림 시에만 제한적으로 사용하세요.",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "a11y.target.blank.rel",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": "target=[\"\\']_blank[\"\\']",
+      "line_negate": "noopener|noreferrer",
+      "context_lines": 2,
+      "jakub_severity": "LOW",
+      "source": "better-accessibility / External link safety",
+      "fix": "target=\"_blank\" 링크에는 rel=\"noopener noreferrer\"를 명시하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "layout.vw",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js",
+        "**/*.css",
+        "**/*.scss",
+        "**/*.html"
+      ],
+      "pattern": "\\b100vw\\b",
+      "jakub_severity": "MEDIUM",
+      "source": "better-layout / Before you finish",
+      "fix": "100vw는 스크롤바 폭을 포함해 가로 스크롤을 유발하므로 100% 또는 w-full로 바꾸세요.",
+      "exceptions": [
+        {
+          "glob": "**/canvas/**",
+          "reason": "전체화면 캔버스 뷰포트는 스크롤바를 숨김",
+          "basis": "jakub-ruleset.draft.json"
+        }
+      ]
+    },
+    {
+      "id": "layout.vh.dvh",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js",
+        "**/*.css",
+        "**/*.scss",
+        "**/*.html"
+      ],
+      "pattern": "\\b100vh\\b|\\bh-screen\\b",
+      "line_negate": "100dvh|h-dvh",
+      "jakub_severity": "MEDIUM",
+      "source": "better-layout / Before you finish",
+      "fix": "모바일 주소창 높이 변화에 대응하도록 100vh/h-screen 대신 100dvh(h-dvh)를 쓰세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "layout.grid.track",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.css",
+        "**/*.scss",
+        "**/*.tsx",
+        "**/*.jsx"
+      ],
+      "pattern": "grid-template-columns:[^;]*\\b1fr\\b",
+      "negate": "minmax\\(0",
+      "jakub_severity": "MEDIUM",
+      "source": "better-layout / Before you finish",
+      "fix": "긴 콘텐츠 오버플로를 막기 위해 1fr 대신 minmax(0, 1fr)을 사용하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "layout.float.mirrored",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.css",
+        "**/*.scss",
+        "**/*.tsx",
+        "**/*.jsx"
+      ],
+      "pattern": "\\bfloat:\\s*(?:left|right)\\b",
+      "jakub_severity": "LOW",
+      "source": "better-layout / Logical properties",
+      "fix": "레이아웃 배치에 float 대신 flex/grid 또는 logical property(float: inline-start)를 사용하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "layout.sticky.scrollpadding",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.css",
+        "**/*.scss",
+        "**/*.tsx",
+        "**/*.jsx"
+      ],
+      "pattern": "position:\\s*sticky\\b",
+      "negate": "scroll-padding|scroll-margin",
+      "jakub_severity": "LOW",
+      "source": "better-layout / Sticky header clearance",
+      "fix": "sticky 헤더 사용 시 앵커 스크롤 가림을 막기 위해 scroll-padding-block-start를 설정하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "layout.zindex.magic",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js",
+        "**/*.css",
+        "**/*.scss",
+        "**/*.html"
+      ],
+      "pattern": "z-index:\\s*999\\d+|\\bz-\\[999\\d+\\]",
+      "jakub_severity": "LOW",
+      "source": "better-layout / Layering discipline",
+      "fix": "임의의 9999 z-index 대신 시맨틱 레이어 스케일(--z-modal, --z-popover 등)을 사용하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "layout.overflow.hidden.clip",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.css",
+        "**/*.scss",
+        "**/*.tsx",
+        "**/*.jsx"
+      ],
+      "pattern": "overflow-x:\\s*hidden\\b",
+      "jakub_severity": "LOW",
+      "source": "better-layout / Clip vs hidden",
+      "fix": "sticky 자식이 깨지지 않도록 overflow-x: hidden 대신 overflow-x: clip을 고려하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "ui.icon.hardcoded",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.svg"
+      ],
+      "pattern": "(?:fill|stroke)=[\"\\']#[0-9a-fA-F]{3,8}",
+      "jakub_severity": "MEDIUM",
+      "source": "better-ui / One SVG, recolored per state",
+      "fix": "아이콘 SVG의 하드코딩된 hex 색상을 currentColor로 교체하세요.",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향 (순수 .svg는 ast 규칙 병행)",
+      "exceptions": [
+        {
+          "glob": "**/libraryIcons.tsx",
+          "reason": "듀오톤/컬러 다이어그램 라이브러리 아이콘 세트",
+          "basis": "Jakub 룰 이식 초안 3절"
+        },
+        {
+          "glob": "**/Wired*Shape.tsx",
+          "reason": "tldraw 와이어프레임 스케치 셰이프 고유 색상",
+          "basis": "Jakub 룰 이식 초안 3절"
+        },
+        {
+          "glob": "**/icon.tsx",
+          "reason": "Next.js 앱 파비콘 생성 파일",
+          "basis": "Jakub 룰 이식 초안 3절"
+        },
+        {
+          "glob": "**/opengraph-image.tsx",
+          "reason": "OG 이미지 생성 파일",
+          "basis": "Next.js ImageResponse 스펙"
+        },
+        {
+          "glob": "**/tldraw-assets/**",
+          "reason": "서드파티 tldraw 벤더 정적 아이콘 에셋",
+          "basis": "vendor asset exclusion"
+        }
+      ]
+    },
+    {
+      "id": "ui.svg.hardcoded.ast",
+      "kind": "source",
+      "checkable_by": "ast",
+      "ast_check": "svg_hardcoded_hex",
+      "path_globs": [
+        "**/*.svg"
+      ],
+      "jakub_severity": "MEDIUM",
+      "source": "better-ui / One SVG, recolored per state",
+      "fix": "독립 .svg 아이콘의 fill/stroke hex 값을 currentColor로 바꾸세요.",
+      "exceptions": [
+        {
+          "glob": "**/brand/**",
+          "reason": "브랜드 로고/일러스트레이션 원본 SVG",
+          "basis": "mindulle-brand 컬러 가이드"
+        },
+        {
+          "glob": "**/tldraw-assets/**",
+          "reason": "서드파티 tldraw 벤더 정적 아이콘 에셋",
+          "basis": "vendor asset exclusion"
+        }
+      ]
+    },
+    {
+      "id": "ui.svg.viewbox.ast",
+      "kind": "source",
+      "checkable_by": "ast",
+      "ast_check": "svg_missing_viewbox",
+      "path_globs": [
+        "**/*.svg"
+      ],
+      "jakub_severity": "MEDIUM",
+      "source": "better-ui / Scalable vector icons",
+      "fix": "<svg> 요소에 viewBox 속성을 추가하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        },
+        {
+          "glob": "**/tldraw-assets/**",
+          "reason": "서드파티 tldraw 벤더 정적 아이콘 에셋",
+          "basis": "vendor asset exclusion"
+        }
+      ]
+    },
+    {
+      "id": "ui.ring.border",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js",
+        "**/*.css",
+        "**/*.scss",
+        "**/*.html"
+      ],
+      "pattern": "box-shadow:\\s*0 0 0 1px|shadow-\\[0_0_0_1px",
+      "negate": "\\bborder\\b|forced-colors",
+      "jakub_severity": "LOW",
+      "source": "better-ui / Shadows for elevation, borders for structure",
+      "fix": "1px box-shadow 링만 쓰면 forced-colors 모드에서 사라지므로 transparent border를 함께 두세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "ui.hover.media_query",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.css",
+        "**/*.scss"
+      ],
+      "pattern": ":hover\\b",
+      "negate": "@media\\s*\\(\\s*hover:\\s*hover\\s*\\)",
+      "jakub_severity": "LOW",
+      "source": "better-ui / Hover on touch devices",
+      "fix": "순수 CSS :hover 스타일은 @media (hover: hover)로 감싸 터치 기기 sticky hover를 방지하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "ui.overlay.overscroll",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": "\\boverflow-(?:y-)?auto\\b",
+      "negate": "overscroll-",
+      "jakub_severity": "LOW",
+      "source": "better-ui / Contain scroll inside overlays",
+      "fix": "모달·드로어·팝오버 스크롤 영역에는 overscroll-contain(overscroll-behavior: contain)을 추가하세요.",
+      "note": "JSX/TSX AST 파서 부재(subprocess 0 원칙)로 grep 규칙으로 하향",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "color.token.oklch.hue_collision",
+      "kind": "source",
+      "checkable_by": "token",
+      "token_check": "oklch_hue_collision",
+      "path_globs": [
+        "**/*.css",
+        "**/tokens/**/*.json"
+      ],
+      "jakub_severity": "MEDIUM",
+      "source": "better-colors / Distinct status vs accent hues",
+      "fix": "상태 토큰(error/warning/success)과 브랜드 accent 토큰의 OKLCH hue 차이를 15° 이상 벌리세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "color.token.contrast.aa",
+      "kind": "source",
+      "checkable_by": "token",
+      "token_check": "token_contrast_aa",
+      "path_globs": [
+        "**/*.css",
+        "**/tokens/**/*.json"
+      ],
+      "jakub_severity": "HIGH",
+      "source": "better-colors / Token contrast pair AA",
+      "fix": "선언된 전경(--text/--foreground)과 배경(--bg/--background) 토큰 대비비를 4.5:1 이상으로 맞추세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "color.token.pure.black_white",
+      "kind": "source",
+      "checkable_by": "token",
+      "token_check": "pure_black_white",
+      "path_globs": [
+        "**/*.css",
+        "**/tokens/**/*.json"
+      ],
+      "jakub_severity": "LOW",
+      "source": "better-colors / Avoid pure #000/#fff",
+      "fix": "순수 #000000/#ffffff 대신 미세한 색조가 있는 뉴트럴 토큰(--mds-*)을 사용하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "color.token.opacity.text",
+      "kind": "source",
+      "checkable_by": "token",
+      "token_check": "opacity_text_token",
+      "path_globs": [
+        "**/*.css",
+        "**/tokens/**/*.json"
+      ],
+      "jakub_severity": "MEDIUM",
+      "source": "better-colors / Opaque text tokens",
+      "fix": "텍스트 색상 토큰에 투명도(rgba/oklch alpha) 대신 불투명 시맨틱 토큰을 사용해 배경 의존 대비 저하를 막으세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "writing.placeholder.lorem",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": "\\blorem\\s+ipsum\\b",
+      "jakub_severity": "HIGH",
+      "source": "better-writing / Real copy over placeholders",
+      "fix": "Lorem ipsum 더미 텍스트를 실제 제품 카피로 교체하세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "writing.vague.click_here",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": ">\\s*(?:Click here|click here|여기\\s*클릭|자세히)\\s*<",
+      "jakub_severity": "LOW",
+      "source": "better-writing / Descriptive link labels",
+      "fix": "'Click here/여기 클릭' 대신 목적지가 드러나는 구체적 링크 라벨을 쓰세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "writing.empty.generic_error",
+      "kind": "source",
+      "checkable_by": "grep",
+      "path_globs": [
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.js"
+      ],
+      "pattern": "Something went wrong\\b",
+      "jakub_severity": "LOW",
+      "source": "better-writing / Actionable error messages",
+      "fix": "일반적인 'Something went wrong' 대신 원인과 다음 행동을 안내하는 문구로 바꾸세요.",
+      "exceptions": [
+        {
+          "glob": "**/*.test.*",
+          "reason": "단위 테스트 픽스처는 UI 규칙 검증 대상에서 제외",
+          "basis": "jakub/interface-review scope-resolution"
+        },
+        {
+          "glob": "**/*.stories.*",
+          "reason": "스토리북 데모 파일 면제",
+          "basis": "jakub-ruleset.draft.json scope.exclude"
+        }
+      ]
+    },
+    {
+      "id": "render.zoom.320px_clipping",
+      "kind": "source",
+      "checkable_by": "render",
+      "jakub_severity": "HIGH",
+      "source": "better-accessibility / Survive zoom and text resize",
+      "fix": "320px 뷰포트·200% 텍스트 확대에서 클리핑이나 겹침이 없는지 브라우저에서 확인하세요.",
+      "exceptions": []
+    },
+    {
+      "id": "render.focus.ring_visible",
+      "kind": "source",
+      "checkable_by": "render",
+      "jakub_severity": "HIGH",
+      "source": "better-accessibility / Visible focus rings",
+      "fix": "모든 인터랙티브 요소에 키보드 포커스 링이 실제로 시인되는지 렌더 검증이 필요합니다.",
+      "exceptions": []
+    },
+    {
+      "id": "render.keyboard.reachability",
+      "kind": "source",
+      "checkable_by": "render",
+      "jakub_severity": "HIGH",
+      "source": "better-accessibility / Full keyboard support",
+      "fix": "Tab/Shift+Tab/Escape로 모든 흐름에 도달·이탈 가능한지 브라우저에서 검증하세요.",
+      "exceptions": []
+    },
+    {
+      "id": "render.contrast.translucent_bg",
+      "kind": "source",
+      "checkable_by": "render",
+      "jakub_severity": "HIGH",
+      "source": "better-colors / Measured contrast only",
+      "fix": "반투명·이미지 위 텍스트 대비비는 렌더된 픽셀 기준으로 측정해야 합니다.",
+      "exceptions": []
+    },
+    {
+      "id": "render.screenreader.name_role",
+      "kind": "source",
+      "checkable_by": "render",
+      "jakub_severity": "HIGH",
+      "source": "better-accessibility / Accessible name and role",
+      "fix": "스크린리더 접근성 트리에서 이름·역할·상태가 올바르게 낭독되는지 확인하세요.",
+      "exceptions": []
+    },
+    {
+      "id": "render.motion.state_only",
+      "kind": "source",
+      "checkable_by": "render",
+      "jakub_severity": "MEDIUM",
+      "source": "better-motion / Motion is not the sole indicator",
+      "fix": "모션만으로 상태를 전달하지 않고 정적 시각 단서가 함께 있는지 확인하세요.",
+      "exceptions": []
+    },
+    {
+      "id": "human.ui.optical_alignment",
+      "kind": "source",
+      "checkable_by": "human",
+      "jakub_severity": "LOW",
+      "source": "better-ui / Optical alignment",
+      "fix": "재생 삼각형·아이콘·배지의 광학적 중심 정렬은 사람 눈으로 최종 확인하세요.",
+      "exceptions": []
+    },
+    {
+      "id": "human.ui.icon_stroke_weight",
+      "kind": "source",
+      "checkable_by": "human",
+      "jakub_severity": "LOW",
+      "source": "better-ui / Match icon weight to text",
+      "fix": "아이콘 선 두께가 인접 본문 폰트 무게와 균형을 이루는지 확인하세요.",
+      "exceptions": []
+    },
+    {
+      "id": "human.type.orphan_words",
+      "kind": "source",
+      "checkable_by": "human",
+      "jakub_severity": "LOW",
+      "source": "better-typography / Avoid orphan words",
+      "fix": "헤드라인·카피 줄바꿈 끝에 고아 단어가 남지 않는지 시각적으로 검토하세요.",
+      "exceptions": []
+    },
+    {
+      "id": "human.writing.consistent_voice",
+      "kind": "source",
+      "checkable_by": "human",
+      "jakub_severity": "MEDIUM",
+      "source": "better-writing / One voice, one term",
+      "fix": "화면 전반의 어조(존대/반말)와 용어가 일관되는지 사람이 검토하세요.",
+      "exceptions": []
+    },
+    {
+      "id": "human.layout.visual_grouping",
+      "kind": "source",
+      "checkable_by": "human",
+      "jakub_severity": "MEDIUM",
+      "source": "better-layout / Proximity and grouping",
+      "fix": "관련 컨트롤과 라벨이 여백 대비로 하나의 그룹으로 읽히는지 확인하세요.",
+      "exceptions": []
+    },
+    {
+      "id": "human.colors.semantic_harmony",
+      "kind": "source",
+      "checkable_by": "human",
+      "jakub_severity": "LOW",
+      "source": "better-colors / Palette restraint",
+      "fix": "한 화면에 과도한 강조색이 경합하지 않는지 시각적으로 검토하세요.",
+      "exceptions": []
     }
   ]
 }

@@ -1,0 +1,16 @@
+{
+  "version": "1.0.0",
+  "description": "Jakub Skills 심각도(HIGH/MEDIUM/LOW) 및 초안 심각도(fail/warn/info) → design_critique 심각도(blocker/major/minor) 매핑",
+  "map": {
+    "HIGH": "blocker",
+    "MEDIUM": "major",
+    "LOW": "minor",
+    "fail": "blocker",
+    "warn": "major",
+    "info": "minor",
+    "blocker": "blocker",
+    "major": "major",
+    "minor": "minor"
+  },
+  "default": "major"
+}

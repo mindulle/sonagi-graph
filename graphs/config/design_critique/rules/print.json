@@ -3,33 +3,42 @@
   "rules": [
     {
       "id": "print_bleed",
+      "kind": "attribute",
+      "checkable_by": "token",
       "field": "bleed_mm",
       "op": "gte",
       "value": 3,
       "when_present": false,
-      "severity": "blocker",
+      "jakub_severity": "HIGH",
       "location": "print_bleed",
-      "fix": "인쇄용 사방 도련(bleed)을 최소 3mm 이상 확보하세요."
+      "fix": "인쇄용 사방 도련(bleed)을 최소 3mm 이상 확보하세요.",
+      "exceptions": []
     },
     {
       "id": "print_cmyk",
+      "kind": "attribute",
+      "checkable_by": "token",
       "field": "color_mode",
       "op": "eq",
       "value": "CMYK",
       "when_present": false,
-      "severity": "blocker",
+      "jakub_severity": "HIGH",
       "location": "color_mode",
-      "fix": "색상 모드를 RGB에서 인쇄용 CMYK로 변환하세요."
+      "fix": "색상 모드를 RGB에서 인쇄용 CMYK로 변환하세요.",
+      "exceptions": []
     },
     {
       "id": "print_paper_weight",
+      "kind": "attribute",
+      "checkable_by": "token",
       "field": "paper_weight_gsm",
       "op": "gt",
       "value": 0,
       "when_present": false,
-      "severity": "major",
+      "jakub_severity": "MEDIUM",
       "location": "paper_weight",
-      "fix": "용지 평량(gsm) 스펙을 인쇄 사양서에 명시하세요."
+      "fix": "용지 평량(gsm) 스펙을 인쇄 사양서에 명시하세요.",
+      "exceptions": []
     }
   ]
 }
