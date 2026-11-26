@@ -1,7 +1,8 @@
 """profiles 프레임워크(v1) — 레지스트리·web 위임·print 게이트/팩 (GRAPH-17·20).
 
 전부 오프라인이다. 외부 프로세스는 `core.exec` 훅 monkeypatch로만 흉내 낸다.
-gs·chromium·네트워크·폰트 설치를 요구하지 않는다.
+gs·chromium·네트워크·폰트 설치를 요구하지 않는다. 예외는 워터마크 PNG 픽셀
+검사 1건 — vectorcraft-cli가 있을 때만 실제 변환을 돌리고 없으면 건너뛴다.
 
 print는 두 단계를 시험한다.
 
@@ -12,6 +13,7 @@ print는 두 단계를 시험한다.
 
 import json
 import re
+import shutil
 from pathlib import Path
 
 import pytest
@@ -1687,6 +1689,88 @@ def test_package_motif_defaults_to_auto_and_validates():
         print_profile.package_spec({"package": _package(notes=[1, 2])})
 
 
+def test_label_watermark_uses_mark_when_present(tmp_path):
+    mark = tmp_path / "mark.svg"
+    mark.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">'
+        '<circle cx="200" cy="200" r="180" fill="#b4551f"/></svg>',
+        encoding="utf-8",
+    )
+    svg = _label_svg_text(mark=True)
+    package = _label_package(mark_path=str(mark))
+    width = 90 * print_profile.MM
+    height = 120 * print_profile.MM
+    pad = print_profile.SAFE_PAD_MM * print_profile.MM
+
+    out, info = print_profile._inject_middle_art(svg, package, width, height)
+    group = _motif_group(out)
+    images = [el for el in group if print_profile._local_name(el.tag) == "image"]
+    shapes = [
+        el
+        for el in group
+        if print_profile._local_name(el.tag) in ("circle", "ellipse", "path", "rect")
+    ]
+
+    # 마크 SVG 하나만 워터마크로 쓴다 — 링·점·추가 장식 없음.
+    assert info["mode"] == "mark-watermark"
+    assert len(images) == 1
+    assert shapes == []
+    assert images[0].get("href", "").startswith("data:image/svg+xml;base64,")
+    assert 0.07 <= info["opacity"] <= 0.10
+    assert float(images[0].get("opacity")) == info["opacity"]
+
+    x, y, w, h = info["bbox"]
+    assert 0.50 * width <= w <= 0.58 * width + 0.5
+    assert w == h
+    # 가로·세로 모두 계산된 밴드 가운데.
+    assert abs((x + w / 2) - width / 2) <= 0.5
+    band_top, band_bottom = info["band_px"]
+    assert abs((y + h / 2) - (band_top + band_bottom) / 2) <= 0.5
+    # 6mm 안전 여백 안, 재료 마지막 줄 아래, 바코드 조용영역 위, 마크 아래.
+    assert x >= pad
+    assert x + w <= width - pad
+    assert y >= pad + 92 + 11 + 8 * 0.25
+    assert y + h <= band_bottom < 343.2
+    mark_box = print_profile._mark_box(width, pad, True)
+    assert mark_box is not None
+    assert y >= mark_box[1] + mark_box[2]
+
+
+def test_label_arc_fallback_without_mark_is_not_a_bullseye():
+    svg = _label_svg_text()
+    package = _label_package()
+    width = 90 * print_profile.MM
+    height = 120 * print_profile.MM
+    pad = print_profile.SAFE_PAD_MM * print_profile.MM
+
+    out, info = print_profile._inject_middle_art(svg, package, width, height)
+    group = _motif_group(out)
+    paths = [el for el in group if print_profile._local_name(el.tag) == "path"]
+
+    assert info["mode"] == "arc"
+    assert 'id="motif-mark"' not in out
+    assert group.get("fill") == "none"
+    assert len(paths) == 2
+    # 완전한 원/점이 아니라 열린 호 두 개다.
+    assert all("A" in str(el.get("d")) for el in paths)
+    assert not any(str(el.get("d")).upper().rstrip().endswith("Z") for el in paths)
+    assert not any(
+        print_profile._local_name(el.tag) in ("circle", "ellipse")
+        for el in group.iter()
+    )
+    opacities = [float(el.get("stroke-opacity")) for el in paths]
+    assert all(0.12 <= value <= 0.18 for value in opacities)
+
+    x, y, w, h = info["bbox"]
+    assert 0.38 * width <= w <= 0.42 * width + 0.5
+    assert x >= pad
+    assert x + w <= width - pad
+    band_top, band_bottom = info["band_px"]
+    assert y >= band_top
+    assert y + h <= band_bottom
+    assert y + h < 343.2
+
+
 def test_label_motif_none_reproduces_previous_layout():
     svg = _label_svg_text()
     package = _label_package(motif="none")
@@ -1696,42 +1780,12 @@ def test_label_motif_none_reproduces_previous_layout():
     out, info = print_profile._inject_middle_art(svg, package, width, height)
 
     assert out == svg
-    assert info is None
+    assert info == {"mode": "none"}
     assert 'id="motif"' not in out
+    assert 'id="notes"' not in out
 
 
-def test_label_motif_stays_between_ingredients_and_barcode():
-    svg = _label_svg_text()
-    package = _label_package()
-    width = 90 * print_profile.MM
-    height = 120 * print_profile.MM
-    pad = print_profile.SAFE_PAD_MM * print_profile.MM
-
-    out, info = print_profile._inject_middle_art(svg, package, width, height)
-    group = _motif_group(out)
-    circles = [el for el in group if print_profile._local_name(el.tag) == "circle"]
-    rings = [el for el in circles if el.get("stroke")]
-    dots = [el for el in circles if el.get("fill")]
-
-    assert info is not None and info["mode"] == "motif"
-    assert 2 <= len(rings) <= 3
-    assert len(dots) == 1
-
-    left = min(float(el.get("cx")) - float(el.get("r")) for el in rings)
-    right = max(float(el.get("cx")) + float(el.get("r")) for el in rings)
-    top = min(float(el.get("cy")) - float(el.get("r")) for el in rings)
-    bottom = max(float(el.get("cy")) + float(el.get("r")) for el in rings)
-
-    # 6mm 안전 여백 안, 재료 마지막 줄 아래, 바코드 조용영역 위.
-    assert left >= pad
-    assert right <= width - pad
-    assert top >= pad + 92 + 11 + 8 * 0.25
-    assert bottom < 343.2
-    # 크기는 라벨 폭의 38~45%.
-    assert 0.38 * width <= right - left <= 0.45 * width + 0.1
-
-
-def test_label_motif_does_not_collide_with_mark_or_barcode(tmp_path):
+def test_label_notes_replace_the_watermark(tmp_path):
     mark = tmp_path / "mark.svg"
     mark.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
     svg = _label_svg_text(mark=True)
@@ -1739,20 +1793,17 @@ def test_label_motif_does_not_collide_with_mark_or_barcode(tmp_path):
     width = 90 * print_profile.MM
     height = 120 * print_profile.MM
 
-    out, _ = print_profile._inject_middle_art(svg, package, width, height)
-    group = _motif_group(out)
-    rings = [
-        el
-        for el in group
-        if print_profile._local_name(el.tag) == "circle" and el.get("stroke")
-    ]
-    top = min(float(el.get("cy")) - float(el.get("r")) for el in rings)
-    bottom = max(float(el.get("cy")) + float(el.get("r")) for el in rings)
+    out, info = print_profile._inject_middle_art(svg, package, width, height)
 
-    mark_bottom = 6 + 6 + print_profile.MARK_SIZE_MM * print_profile.MM
-    assert top >= mark_bottom
-    assert bottom < 343.2
-    assert 'id="mark"' in out
+    assert info["mode"] == "mark-watermark"
+    assert 'id="motif-mark"' in out
+
+    out, info = print_profile._inject_middle_art(
+        svg, _label_package(mark_path=str(mark), notes=["차분한 하루"]), width, height
+    )
+    assert info["mode"] == "notes"
+    assert 'id="motif"' not in out
+    assert 'id="motif-mark"' not in out
 
 
 def test_label_notes_render_at_most_three_lines_and_record_truncation():
@@ -1793,11 +1844,17 @@ def test_label_notes_wrap_before_truncating():
 
 
 def test_label_middle_is_deterministic_and_hash_driven(tmp_path, monkeypatch):
-    svg = _label_svg_text()
+    mark = tmp_path / "mark.svg"
+    mark.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">'
+        '<circle cx="200" cy="200" r="180" fill="#1f4536"/></svg>',
+        encoding="utf-8",
+    )
+    svg = _label_svg_text(mark=True)
     width = 90 * print_profile.MM
     height = 120 * print_profile.MM
-    first = _label_package(brand="Mindulle Tea")
-    other = _label_package(brand="Sonagi Tea")
+    first = _label_package(brand="Mindulle Tea", mark_path=str(mark))
+    other = _label_package(brand="Sonagi Tea", mark_path=str(mark))
 
     out_a, info_a = print_profile._inject_middle_art(svg, first, width, height)
     out_b, _ = print_profile._inject_middle_art(svg, first, width, height)
@@ -1807,11 +1864,12 @@ def test_label_middle_is_deterministic_and_hash_driven(tmp_path, monkeypatch):
     assert info_a == print_profile._inject_middle_art(svg, first, width, height)[1]
     assert out_a != out_c
     assert info_a["seed"] != info_c["seed"]
+    assert info_a["ratio"] != info_c["ratio"]
 
     # 실제 render 경로도 같은 입력에 같은 SVG 바이트를 낸다.
-    _record_exec(monkeypatch, [], label_svg=svg)
+    _record_exec(monkeypatch, [], label_svg=_label_svg_text())
     profile = base.get_profile("print")
-    spec = _print_spec(package=_package(size_mm=[90, 120]))
+    spec = _print_spec(package=_package(size_mm=[90, 120], mark_path=str(mark)))
     variant = profile.plan({}, spec, [])[0]
     run_a = profile.render(
         variant, base.ProfileContext(run=print_profile._run, run_dir=tmp_path / "a")
@@ -1821,40 +1879,76 @@ def test_label_middle_is_deterministic_and_hash_driven(tmp_path, monkeypatch):
     )
     assert Path(run_a["svg"]).read_bytes() == Path(run_b["svg"]).read_bytes()
     manifest = json.loads(Path(run_a["manifest"]).read_text(encoding="utf-8"))
-    assert manifest["middle"]["mode"] == "motif"
-    assert 'id="motif"' in Path(run_a["svg"]).read_text(encoding="utf-8")
+    assert manifest["middle"]["mode"] == "mark-watermark"
+    assert 'id="motif-mark"' in Path(run_a["svg"]).read_text(encoding="utf-8")
 
 
-def test_pouch_motif_uses_the_same_band_helper():
+@pytest.mark.skipif(
+    not shutil.which(print_profile.core_env.VECTORCRAFT),
+    reason="vectorcraft-cli가 없어 PNG 픽셀 검사를 건너뛴다",
+)
+def test_label_watermark_renders_a_tinted_center_pixel(tmp_path):
+    """실제 변환기로 마크 워터마크의 가운데 픽셀이 종이색이 아님을 확인한다."""
+    from PIL import Image
+
+    mark = tmp_path / "mark.svg"
+    mark.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">'
+        '<circle cx="200" cy="200" r="180" fill="#b4551f"/></svg>',
+        encoding="utf-8",
+    )
+    package = _label_package(mark_path=str(mark))
     width = 90 * print_profile.MM
     height = 120 * print_profile.MM
-    pad = print_profile.SAFE_PAD_MM * print_profile.MM
+    out, info = print_profile._inject_middle_art(
+        _label_svg_text(mark=True), package, width, height
+    )
+    assert info["mode"] == "mark-watermark"
 
+    svg = tmp_path / "label.svg"
+    svg.write_text(out, encoding="utf-8")
+    png = tmp_path / "label.png"
+    base.convert_png(svg, png, 600)
+
+    with Image.open(png) as image:
+        rgba = image.convert("RGBA")
+        rgb = Image.new("RGB", rgba.size, (255, 255, 255))
+        rgb.paste(rgba, mask=rgba.split()[-1])
+        paper = rgb.getpixel((4, 4))
+        # 라벨 캔버스 가운데 — 중간 밴드 안, 워터마크가 지나가는 자리.
+        center = rgb.getpixel((rgb.size[0] // 2, rgb.size[1] // 2))
+    assert paper == (255, 255, 255)
+    assert sum(abs(a - b) for a, b in zip(center, paper)) >= 10
+
+
+def test_pouch_motif_none_draws_nothing_but_records_mode():
     plain = print_profile.build_pouch_svg(
         print_profile.package_spec(
             {"package": _package(type="pouch", size_mm=[90, 120], motif="none")}
         )
     )
     assert 'id="motif"' not in plain[0]
-    assert "middle" not in plain[1]
+    assert plain[1]["middle"] == {"mode": "none"}
 
-    decorated = print_profile.build_pouch_svg(
+
+def test_pouch_arc_fallback_stays_inside_the_middle_band():
+    width = 90 * print_profile.MM
+    height = 120 * print_profile.MM
+    pad = print_profile.SAFE_PAD_MM * print_profile.MM
+
+    decorated, manifest = print_profile.build_pouch_svg(
         print_profile.package_spec(
             {"package": _package(type="pouch", size_mm=[90, 120])}
         )
     )
-    group = _motif_group(decorated[0])
-    rings = [
-        el
-        for el in group
-        if print_profile._local_name(el.tag) == "circle" and el.get("stroke")
-    ]
-    assert decorated[1]["middle"]["mode"] == "motif"
-    assert min(float(el.get("cx")) - float(el.get("r")) for el in rings) >= pad
-    assert max(float(el.get("cx")) + float(el.get("r")) for el in rings) <= width - pad
-    assert max(float(el.get("cy")) + float(el.get("r")) for el in rings) < (
-        height - pad - (14 * print_profile.MM + 2 * 4.6 * print_profile.MM)
-    )
+    group = _motif_group(decorated)
+    paths = [el for el in group if print_profile._local_name(el.tag) == "path"]
+    assert manifest["middle"]["mode"] == "arc"
+    assert len(paths) == 2
+    x, y, w, h = manifest["middle"]["bbox"]
+    assert x >= pad
+    assert x + w <= width - pad
+    assert y + h < height - pad - (14 * print_profile.MM + 2 * 4.6 * print_profile.MM)
 
 
 def test_print_pack_uses_preset_limits_naming_and_records_w8(tmp_path):
