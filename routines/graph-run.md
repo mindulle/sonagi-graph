@@ -36,7 +36,18 @@ python3 scripts/graph_cli.py run <graph_id> --input '<json>' --wait --timeout 12
 
 사용자가 선택하면:
 ```bash
-python3 scripts/graph_cli.py approve <thread_id> --graph <graph_id> --values '{"selected_option_index":0}' --wait
+python3 scripts/graph_cli.py approve <thread_id> --graph <graph_id> \
+    --values '{"selection":["..."],"approval_status":"approved"}' \
+    --tag 차분함 --tag 여백 --reason "빈 공간이 편안해서" --wait
+```
+
+**모든 승인에 `--tag`와 `--reason`을 붙인다.** 이 값이 취향 기록(`decisions.jsonl`)에
+남아 다음 후보 순위의 근거가 된다. 태그는 `--tag`를 반복해 1~3개, 이유는 사용자가
+말한 표현을 그대로 짧게 적는다(예: "빈 공간이 편안해서"). 임의로 지어내지 않는다.
+
+```bash
+python3 scripts/graph_cli.py decisions --last 5    # 최근 기록
+python3 scripts/graph_cli.py taste                 # 태그·스타일 승률·비평 일치 요약
 ```
 
 ### 3. 상태 확인

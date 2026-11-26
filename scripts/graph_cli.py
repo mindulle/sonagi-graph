@@ -3,7 +3,8 @@
 
 서버(:8123)의 HTTP API만 쓴다. 그래프 모듈은 import하지 않으므로, Kimaki가 어느
 디렉터리에서 실행되든 동작한다. 원장 조회(`runs`·`show`)는 manifest를 읽기 위해
-표준 라이브러리만 쓰는 `graphs.core.artifacts`만 가져온다.
+표준 라이브러리만 쓰는 `graphs.core.artifacts`를, 취향 기록(`approve`·`decisions`·
+`taste`)은 같은 저장소의 `graphs.taste`를 가져온다.
 
 사용 예
     python3 scripts/graph_cli.py list
@@ -12,11 +13,18 @@
     python3 scripts/graph_cli.py status <thread_id>
     python3 scripts/graph_cli.py approve <thread_id> --graph copywriting_craft \
         --values '{"selected_option_index":1}' --wait
-    python3 scripts/graph_cli.py runs --limit 10
-    python3 scripts/graph_cli.py show <thread_id>
+    python3 scripts/graph_cli.py approve <thread_id> --graph entry_pack \
+        --values '{"selection":["variant-a"]}' --tag 차분함 --tag 여백 \
+        --reason "빈 공간이 편안해서" --wait
+    python3 scripts/graph_cli.py decisions --last 5
+    python3 scripts/graph_cli.py taste
 
 환경 변수
-    LANGGRAPH_URL   서버 주소 (기본 http://127.0.0.1:8123)
+    LANGGRAPH_URL     서버 주소 (기본 http://127.0.0.1:8123)
+    SONAGI_TASTE_DIR  취향 기록 폴더 (기본 /home/ubuntu/sonagi-taste)
+
+`approve`는 성공하면 취향 결정 기록(`decisions.jsonl`)을 한 줄 덧붙인다.
+기록에 실패해도 승인은 그대로 진행한다 — 승인이 먼저다.
 """
 
 import argparse
@@ -34,6 +42,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from graphs.core import artifacts  # noqa: E402  (저장소 루트의 core만 읽는다)
+from graphs.taste import ledger as taste_ledger  # noqa: E402
+from graphs.taste import profile as taste_profile  # noqa: E402
 
 BASE = os.environ.get("LANGGRAPH_URL", "http://127.0.0.1:8123").rstrip("/")
 TERMINAL = {"success", "error", "failed", "interrupted", "timeout"}
@@ -367,6 +377,38 @@ def cmd_status(args):
     _print_summary(args.thread_id, state, run, as_json=args.json)
 
 
+def _record_approval(args, values, state=None):
+    """승인 성공 뒤 취향 결정을 원장에 남긴다. 실패해도 승인은 유지한다."""
+    try:
+        current = state if state is not None else _state(args.thread_id)
+        record = taste_ledger.build_record(
+            thread_id=args.thread_id,
+            state=current,
+            values=values,
+            graph=args.graph,
+            reason_tags=getattr(args, "tag", None) or (),
+            reason_text=getattr(args, "reason", "") or "",
+        )
+        if not record["options"]:
+            print(
+                "취향 기록: 이 실행에는 선택지(options)가 없어 건너뜁니다.",
+                file=sys.stderr,
+            )
+            return
+        path = taste_ledger.append_decision(record)
+        print(
+            "취향 기록: {} (후보 {}개 중 {}개 선택)".format(
+                path, len(record["options"]), len(record["selected"])
+            ),
+            file=sys.stderr,
+        )
+    except Exception as exc:  # noqa: BLE001 - 기록 실패가 승인을 막으면 안 된다
+        print(
+            f"⚠️  취향 기록을 남기지 못했습니다(승인은 완료): {exc}",
+            file=sys.stderr,
+        )
+
+
 def cmd_approve(args):
     values = json.loads(args.values)
     # 1) 사람이 고른 값을 상태에 반영
@@ -383,9 +425,11 @@ def cmd_approve(args):
                 {"thread_id": args.thread_id, "status": "resumed"}, ensure_ascii=False
             )
         )
+        _record_approval(args, values)
         return
     state, run = _wait(args.thread_id, timeout=args.timeout)
     _print_summary(args.thread_id, state, run, as_json=args.json)
+    _record_approval(args, values, state=state)
 
 
 def cmd_runs(args):
@@ -442,6 +486,31 @@ def cmd_show(args):
     print(format_manifests(manifests))
 
 
+def cmd_decisions(args):
+    limit = max(1, int(getattr(args, "last", 10)))
+    records = taste_ledger.read_decisions(limit)
+    if args.json:
+        print(json.dumps(records, ensure_ascii=False, default=str))
+        return
+    print(taste_ledger.format_decisions(records))
+
+
+def cmd_taste(args):
+    # 프로필은 처음 조회할 때 빈 파일로 한 번만 만든다(증류는 별도 이슈).
+    profile = taste_profile.load_profile()
+    summary = taste_ledger.summarize(taste_ledger.read_decisions())
+    summary["profile"] = {
+        "path": str(taste_profile.profile_path()),
+        "decisions": profile.get("decisions"),
+        "confidence": profile.get("confidence"),
+        "notes": profile.get("notes") or "",
+    }
+    if args.json:
+        print(json.dumps(summary, ensure_ascii=False, default=str))
+        return
+    print(taste_ledger.format_summary(summary))
+
+
 def main(argv=None):
     global BASE
     parser = argparse.ArgumentParser(description="LangGraph 서버 원격 제어 CLI")
@@ -473,6 +542,19 @@ def main(argv=None):
     )
     p.add_argument("--wait", action="store_true", help="완료/HITL까지 대기")
     p.add_argument("--timeout", type=int, default=180, help="대기 시간(초)")
+    p.add_argument(
+        "--reason",
+        default="",
+        help="왜 골랐는지 사람 말로 (예: '빈 공간이 편안해서')",
+    )
+    p.add_argument(
+        "--tag",
+        action="append",
+        default=[],
+        dest="tag",
+        metavar="NAME",
+        help="이유 태그, 반복 가능 (예: --tag 차분함 --tag 여백)",
+    )
     p.set_defaults(func=cmd_approve)
 
     p = sub.add_parser("runs", help="최근 실행 원장 (thread_id를 주면 그 스레드 이력)")
@@ -495,6 +577,25 @@ def main(argv=None):
         help="JSON으로 출력",
     )
     p.set_defaults(func=cmd_show)
+
+    p = sub.add_parser("decisions", help="최근 취향 결정 기록")
+    p.add_argument("--last", type=int, default=10, help="최근 N건 (기본 10)")
+    p.add_argument(
+        "--json",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="JSON으로 출력",
+    )
+    p.set_defaults(func=cmd_decisions)
+
+    p = sub.add_parser("taste", help="취향 요약 (태그·스타일·비평 일치)")
+    p.add_argument(
+        "--json",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="JSON으로 출력",
+    )
+    p.set_defaults(func=cmd_taste)
 
     args = parser.parse_args(argv)
     if args.url:
