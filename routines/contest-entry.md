@@ -62,9 +62,12 @@ description: >
 - `spec.package`에 `brand`·`product`·`size_mm`(가로·세로 mm 두 값)가 필수다.
 - `type`은 `label` 또는 `pouch`(기본 `label`).
 - `mark_path`는 선택이지만 주면 존재하는 파일이어야 한다(SVG 권장).
-- `motif`는 `auto`(기본) 또는 `none`이다. `auto`는 브랜드 문자열 해시로만
-  정해지는 동심원 모티프를 재료와 바코드 사이 빈 밴드에 그린다. `none`은 그리지
-  않아 이전 레이아웃을 그대로 재현한다.
+- `motif`는 `auto`(기본) 또는 `none`이다. `auto`는 `mark_path`가 있으면 같은
+  마크 SVG를 재료와 바코드 사이 빈 밴드 가운데에 큰 워터마크(라벨 폭의 50~58%,
+  불투명도 0.08)로 놓고, 없으면 완전한 원이 아닌 이중 호(라벨 폭의 40%,
+  불투명도 0.12~0.18)를 그린다. `none`은 아무것도 그리지 않아 이전 레이아웃을
+  그대로 재현한다. 어느 쪽이든 라벨 manifest의 `middle.mode`에
+  `mark-watermark`·`arc`·`notes`·`none` 중 하나와 `opacity`·`bbox`가 남는다.
 - `notes`는 선택이다. 문자열 또는 짧은 줄 목록을 주면 모티프 대신 중간 밴드
   가운데에 작은 글씨(최대 3줄)로 놓는다. 3줄을 넘으면 접은 뒤 줄임표로 자르고
   라벨 manifest의 `middle.truncated`에 기록한다.

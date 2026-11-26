@@ -34,7 +34,7 @@ spec 예::
         "colors": {"ink": "#161616", "paper": "#fbf9f5",
                    "accent": "#b4551f", "calm": "#1f4536"},
         "mark_path": "/path/mark.svg",
-        "motif": "auto",             # auto(기본) | none — 중간 밴드 모티프
+        "motif": "auto",             # auto(기본): 마크 워터마크/이중 호 | none
         "notes": ["우아한 향", "차분한 하루"]  # 선택: 모티프 대신 놓는 짧은 문구(최대 3줄)
       }
     }
@@ -81,8 +81,16 @@ MARK_SIZE_MM = 14.0
 #: 모든 값은 mm·px 상수라 난수·시각이 끼어들지 않는다(결정론).
 MOTIF_GAP_MM = 4.0
 MOTIF_MIN_MM = 18.0
-MOTIF_WIDTH_RANGE = (0.38, 0.45)
 MOTIF_MODES = ("auto", "none")
+#: 마크가 있을 때 — 같은 SVG를 큰 워터마크로 놓는다. 폭은 라벨 폭의 50~58%,
+#: 밴드 안에 들어가도록 높이로 한 번 더 제한한다. 불투명도는 0.07~0.10.
+WATERMARK_WIDTH_RANGE = (0.50, 0.58)
+WATERMARK_OPACITY = 0.08
+WATERMARK_BAND_INSET = 0.96
+#: 마크가 없을 때 — 동심원(과녁) 대신 서로 다른 중심·각도로 열린 이중 호.
+ARC_WIDTH_RATIO = 0.40
+ARC_BAND_INSET = 0.92
+ARC_OPACITY = (0.16, 0.13)  # 바깥(calm)·안쪽(accent)
 NOTES_FONT_PX = 9.0
 NOTES_LINE_PX = 12.0
 NOTES_MAX_LINES = 3
@@ -709,70 +717,143 @@ def _notes_fragment(
     return "".join(parts), info
 
 
-def _motif_fragment(
+def _brand_seed(package: Mapping[str, Any]) -> bytes:
+    """브랜드 문자열만으로 정해지는 결정론 시드(난수·시각 없음)."""
+    return hashlib.sha256(str(package.get("brand") or "").encode("utf-8")).digest()
+
+
+def _mark_data_uri(package: Mapping[str, Any]) -> str:
+    """`mark_path` SVG를 base64 data URI로 읽는다(마크 태그와 같은 소스)."""
+    data = base64.b64encode(Path(str(package["mark_path"])).read_bytes()).decode(
+        "ascii"
+    )
+    return f"data:image/svg+xml;base64,{data}"
+
+
+def _watermark_fragment(
     package: Mapping[str, Any], width_px: float, top: float, bottom: float
 ) -> Tuple[str, Dict[str, Any]]:
-    """브랜드 문자열 해시로만 정해지는 동심원 모티프를 그린다.
+    """마크 SVG를 중간 밴드 가운데의 큰 워터마크로 놓는다.
 
-    링 개수(2~3)·크기(라벨 폭의 38~45%)·강조 점의 각도는 모두 해시 바이트에서
-    나온다. 난수·시각·폰트가 없으므로 같은 입력은 항상 같은 SVG 바이트가 된다.
+    링·점 같은 장식은 더하지 않는다. 크기(폭 50~58%)는 브랜드 해시에서, 위치는
+    계산된 밴드 가운데에서 나온다. 밴드 높이를 넘지 않게 한 번 더 자르므로
+    재료·바코드·마크 어느 것도 건드리지 않는다.
     """
-    digest = hashlib.sha256(str(package.get("brand") or "").encode("utf-8")).digest()
+    digest = _brand_seed(package)
     band_top, band_bottom = _middle_band(top, bottom)
     band_h = band_bottom - band_top
     info: Dict[str, Any] = {
-        "mode": "motif",
+        "mode": "mark-watermark",
         "seed": digest[:8].hex(),
+        "opacity": WATERMARK_OPACITY,
         "band_px": [round(band_top, 1), round(band_bottom, 1)],
     }
+    if not package.get("mark_path"):
+        info["skipped"] = "mark_path가 없다"
+        return "", info
     if band_h < MOTIF_MIN_MM * MM:
         info["skipped"] = f"중간 밴드가 {band_h / MM:.1f}mm로 너무 좁다"
         return "", info
 
     pad = SAFE_PAD_MM * MM
-    ratio = MOTIF_WIDTH_RANGE[0] + (digest[1] % 8) / 100.0
-    diameter = min(width_px * ratio, width_px - 2 * pad, band_h)
-    rings = 2 + digest[0] % 2
-    factors = [1.0, 0.74, 0.48][:rings]
+    ratio = WATERMARK_WIDTH_RANGE[0] + (digest[0] % 9) / 100.0
+    size = min(width_px * ratio, width_px - 2 * pad, band_h * WATERMARK_BAND_INSET)
+    if size < MOTIF_MIN_MM * MM:
+        info["skipped"] = "워터마크가 들어갈 폭이 없다"
+        return "", info
+
+    x = (width_px - size) / 2
+    y = (band_top + band_bottom) / 2 - size / 2
+    fragment = (
+        f'<g id="motif"><image id="motif-mark" x="{x:.1f}" y="{y:.1f}" '
+        f'width="{size:.1f}" height="{size:.1f}" opacity="{WATERMARK_OPACITY:.2f}" '
+        f'href="{_mark_data_uri(package)}"/></g>'
+    )
+    info.update(
+        {
+            "bbox": [round(x, 1), round(y, 1), round(size, 1), round(size, 1)],
+            "size_px": round(size, 1),
+            "ratio": round(size / width_px, 3),
+        }
+    )
+    return fragment, info
+
+
+def _arc_point(
+    cx: float, cy: float, radius: float, degrees: float
+) -> Tuple[float, float]:
+    radians = math.radians(degrees)
+    return cx + radius * math.cos(radians), cy + radius * math.sin(radians)
+
+
+def _arc_path(cx: float, cy: float, radius: float, start: float, sweep: float) -> str:
+    """중심·반지름·시작각·스윕으로 열린 호 경로를 만든다(닫힌 원이 아니다)."""
+    x1, y1 = _arc_point(cx, cy, radius, start)
+    x2, y2 = _arc_point(cx, cy, radius, start + sweep)
+    large = 1 if abs(sweep) > 180 else 0
+    direction = 1 if sweep >= 0 else 0
+    return (
+        f"M {x1:.1f},{y1:.1f} A {radius:.1f},{radius:.1f} 0 {large} {direction} "
+        f"{x2:.1f},{y2:.1f}"
+    )
+
+
+def _arc_fragment(
+    package: Mapping[str, Any], width_px: float, top: float, bottom: float
+) -> Tuple[str, Dict[str, Any]]:
+    """마크가 없을 때의 이중 호 — 과녁이 아닌 열린 두 획.
+
+    바깥 호는 차분한 색으로 크게 열고, 안쪽 호는 중심을 살짝 옮겨 강조색으로
+    짧게 긋는다. 완전한 원·채운 점은 쓰지 않으므로 도식적으로 보이지 않는다.
+    """
+    digest = _brand_seed(package)
+    band_top, band_bottom = _middle_band(top, bottom)
+    band_h = band_bottom - band_top
+    info: Dict[str, Any] = {
+        "mode": "arc",
+        "seed": digest[:8].hex(),
+        "opacity": list(ARC_OPACITY),
+        "band_px": [round(band_top, 1), round(band_bottom, 1)],
+    }
+    if band_h < MOTIF_MIN_MM * MM:
+        info["skipped"] = f"중간 밴드가 {band_h / MM:.1f}mm로 너무 좁다"
+        return "", info
+    pad = SAFE_PAD_MM * MM
+    outer_stroke, inner_stroke = 1.4, 1.0
+    size = min(width_px * ARC_WIDTH_RATIO, band_h * ARC_BAND_INSET)
+    size = min(size, width_px - 2 * pad)
+    radius = size / 2 - outer_stroke
+    if radius <= 0:
+        info["skipped"] = "호가 들어갈 폭이 없다"
+        return "", info
+
     cx = width_px / 2
     cy = (band_top + band_bottom) / 2
-
     colors = package.get("colors") or DEFAULT_COLORS
     calm = colors.get("calm", DEFAULT_COLORS["calm"])
     accent = colors.get("accent", DEFAULT_COLORS["accent"])
-    # 바깥은 차분한 색, 가운데는 강조색 — 인쇄에서 잉크가 튀지 않게 낮은 불투명도.
-    palette = [
-        (calm, 0.30, 1.4),
-        (accent, 0.28, 1.1),
-        (calm, 0.22, 1.0),
+    # 안쪽 호는 중심을 조금 옮기고 짧게 그어 동심원 인상을 지운다.
+    inner_cx = cx + size * 0.09
+    inner_cy = cy - size * 0.07
+    inner_radius = radius * 0.58
+
+    parts = [
+        '<g id="motif" fill="none" stroke-linecap="round">',
+        f'<path d="{_arc_path(cx, cy, radius, -12, 232)}" '
+        f'stroke="{_attr(calm)}" stroke-width="{outer_stroke:.1f}" '
+        f'stroke-opacity="{ARC_OPACITY[0]:.2f}"/>',
+        f'<path d="{_arc_path(inner_cx, inner_cy, inner_radius, 118, 168)}" '
+        f'stroke="{_attr(accent)}" stroke-width="{inner_stroke:.1f}" '
+        f'stroke-opacity="{ARC_OPACITY[1]:.2f}"/>',
+        "</g>",
     ]
-
-    parts = ['<g id="motif" fill="none">']
-    for factor, (color, opacity, stroke_width) in zip(factors, palette):
-        parts.append(
-            f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{diameter * factor / 2:.1f}" '
-            f'stroke="{_attr(color)}" stroke-width="{stroke_width:.1f}" '
-            f'stroke-opacity="{opacity:.2f}"/>'
-        )
-
-    # 강조 점은 가운데 링 안쪽, 해시로 정한 각도에 놓는다. 링 밖으로 나가지 않는다.
-    angle = (digest[2] / 255.0) * 2 * math.pi
-    dot_r = max(2.0, diameter * 0.035)
-    dot_orbit = max(diameter * 0.18, diameter * 0.74 / 2 - dot_r * 1.6)
-    dot_x = cx + dot_orbit * math.cos(angle)
-    dot_y = cy + dot_orbit * math.sin(angle)
-    parts.append(
-        f'<circle cx="{dot_x:.1f}" cy="{dot_y:.1f}" r="{dot_r:.1f}" '
-        f'fill="{_attr(accent)}" fill-opacity="0.55"/>'
-    )
-    parts.append("</g>")
-
+    reach = radius + outer_stroke
+    bbox = [cx - reach, cy - reach, reach * 2, reach * 2]
     info.update(
         {
-            "rings": rings,
-            "diameter_px": round(diameter, 1),
-            "diameter_ratio": round(diameter / width_px, 3),
-            "center_px": [round(cx, 1), round(cy, 1)],
+            "bbox": [round(value, 1) for value in bbox],
+            "size_px": round(reach * 2, 1),
+            "ratio": round(reach * 2 / width_px, 3),
         }
     )
     return "".join(parts), info
@@ -786,14 +867,17 @@ def _middle_fragment(
 ) -> Tuple[str, Optional[Dict[str, Any]]]:
     """중간 밴드에 들어갈 조각과 manifest 기록을 만든다.
 
-    notes가 있으면 모티프 대신 노트를 쓴다. `motif: "none"`은 모티프를 끄고
-    오늘의 레이아웃을 그대로 재현한다(빈 문자열 + None).
+    notes가 있으면 모티프 대신 노트를 쓴다. `motif: "auto"`는 마크가 있으면
+    마크 워터마크, 없으면 이중 호다. `motif: "none"`은 아무것도 그리지 않고
+    이전 레이아웃을 그대로 재현한다(빈 문자열 + mode=none 기록).
     """
     if package.get("notes"):
         return _notes_fragment(package, width_px, top, bottom)
     if str(package.get("motif") or "auto") == "none":
-        return "", None
-    return _motif_fragment(package, width_px, top, bottom)
+        return "", {"mode": "none"}
+    if package.get("mark_path"):
+        return _watermark_fragment(package, width_px, top, bottom)
+    return _arc_fragment(package, width_px, top, bottom)
 
 
 def _inject_middle_art(
