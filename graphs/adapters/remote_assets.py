@@ -50,6 +50,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Sequence
 
+from graphs.adapters import preflight as preflight_mod
 from graphs.core import env as core_env
 from graphs.core import exec as core_exec
 
@@ -83,6 +84,10 @@ class RemotePaths:
     assets_dir: Path = field(default_factory=lambda: Path(core_env.ASSETS_DIR))
     tokens: str = "tokens/semantic.json"
     timeout: float = DEFAULT_TIMEOUT
+    #: 로컬 카탈로그(이름→경로 해석용). 원격 카탈로그는 ssh로 통째로 읽지 않는다.
+    local_catalog: Path = field(default_factory=lambda: Path(core_env.CATALOG))
+    #: 원격 자산 라이브러리 루트. 비우면 카탈로그 위치에서 유도한다.
+    library: str = ""
 
     @classmethod
     def from_env(
@@ -103,6 +108,12 @@ class RemotePaths:
                 assets_dir or source.get("SONAGI_ASSETS_DIR") or core_env.ASSETS_DIR
             ),
             timeout=float(source.get("SONAGI_RENDER_TIMEOUT") or DEFAULT_TIMEOUT),
+            local_catalog=Path(
+                source.get("SONAGI_RENDER_LOCAL_CATALOG")
+                or source.get("SONAGI_CATALOG")
+                or core_env.CATALOG
+            ),
+            library=source.get("SONAGI_RENDER_LIBRARY") or "",
         )
 
     @property
@@ -112,6 +123,43 @@ class RemotePaths:
     @property
     def tokens_path(self) -> str:
         return f"{self.root}/{self.tokens}"
+
+    @property
+    def library_root(self) -> str:
+        """원격 라이브러리 루트. 기본은 카탈로그 옆 `library/`다."""
+        if self.library:
+            return self.library.rstrip("/")
+        return f"{Path(self.catalog).parent.parent}/library"
+
+    def to_remote_path(self, value: str) -> str:
+        """로컬 카탈로그의 `path`를 원격 절대 경로로 옮긴다.
+
+        동기화 사본은 `/home/ubuntu/sonagi-assets/library/...`를 담고,
+        원격 렌더러는 `/srv/sonagi-assets/library/...`를 연다. 이미 원격
+        경로면 그대로 둔다(preflight 배치에 그대로 쓰인다).
+        """
+        raw = str(value)
+        if raw.startswith("/app/data/"):
+            return f"{self.library_root}/{raw[len('/app/data/') :]}"
+        local_library = Path(self.assets_dir) / "library"
+        try:
+            relative = Path(raw).relative_to(local_library)
+        except ValueError:
+            pass
+        else:
+            return f"{self.library_root}/{relative.as_posix()}"
+        remote_root = self.library_root.rstrip("/") + "/"
+        if raw.startswith(remote_root):
+            return raw
+        marker = "/library/"
+        if marker in raw:
+            return f"{self.library_root}/{raw.split(marker, 1)[1]}"
+        if Path(raw).is_absolute():
+            return raw
+        relative = raw.lstrip("/")
+        if relative.startswith("library/"):
+            relative = relative[len("library/") :]
+        return f"{self.library_root}/{relative}"
 
 
 def enabled(environ: Optional[Dict[str, str]] = None) -> bool:
@@ -214,11 +262,18 @@ def render(
     run: Optional[Runner] = None,
     sync: bool = True,
     keep_remote: bool = False,
+    preflight: Optional[Dict[str, Any]] = None,
+    check_assets: bool = True,
+    catalog: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """레시피 1개를 devops에서 렌더하고 산출물을 로컬 `out_dir`로 가져온다.
 
     `style`은 스타일 이름(`editorial`) 또는 로컬 `styles/*.json` 경로다.
     반환값은 `assets.render_recipe`와 같은 모양에 원격 정보를 덧붙인다.
+
+    렌더 전에 자산 참조를 **ssh 한 번**으로 확인하고(GRAPH-24), 없는 참조만
+    걷어낸 레시피를 원격에 올린다. ssh가 실패하면 `PreflightError`로 멈춘다 —
+    확인 불가를 "전부 누락"으로 바꾸지 않는다.
     """
     paths = paths or RemotePaths.from_env()
     recipe = Path(recipe_path).expanduser().resolve()
@@ -227,6 +282,32 @@ def render(
     style_name = Path(str(style)).stem
     if not style_name:
         raise ValueError("style 이름이 비어 있습니다")
+
+    if preflight is not None:
+        report: Dict[str, Any] = dict(preflight)
+    elif check_assets:
+        filtered, checked = preflight_mod.preflight_recipe_file(
+            recipe,
+            mode="remote",
+            catalog=catalog,
+            catalog_path=paths.local_catalog,
+            ssh_prefix=ssh_argv(paths),
+            to_remote_path=paths.to_remote_path,
+            run=run,
+            timeout=paths.timeout,
+            cache=True,
+            cache_key=(
+                paths.host,
+                paths.root,
+                paths.library_root,
+                str(paths.assets_dir),
+            ),
+        )
+        preflight_mod.ensure_renderable(checked)
+        recipe = preflight_mod.write_filtered_recipe(recipe, filtered, checked)
+        report = checked
+    else:
+        report = preflight_mod.empty_report("remote")
 
     if sync:
         ensure_synced(paths=paths, run=run)
@@ -310,6 +391,8 @@ def render(
         "svg": str(svg),
         "manifest": str(manifest) if manifest is not None else None,
         "remote": {"host": paths.host, "root": paths.root, "out": remote_out},
+        "skipped_assets": list(report.get("skipped") or []),
+        "preflight": dict(report),
     }
 
 
