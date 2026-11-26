@@ -74,6 +74,11 @@ sudo -u ubuntu gh repo clone mindulle/sonagi-graph /home/ubuntu/sonagi-graph-dep
 `install.sh`가 없으면 기존 체크아웃의 `.env`를 복사한다. 체크아웃/리셋은
 untracked 파일을 지우지 않는다.
 
+배포 스크립트와 상태 헬퍼는 클론 밖 `/usr/local/lib/sonagi-graph-deploy`의
+안정 사본에서 실행한다(`ExecStart`). 배포가 클론을 이전 커밋으로 체크아웃해도
+다음 회차가 낡은 스크립트로 시작하지 않게 하기 위해서다. 배포 로직을 바꾸면
+`install.sh`를 다시 실행해 안정 사본도 갱신한다.
+
 `langgraph up`은 compose 프로젝트 이름을 디렉터리 이름에서 만든다. 배포 클론
 이름이 바뀌어도 기존 스택을 교체하도록 스크립트가
 `COMPOSE_PROJECT_NAME=sonagi-graph`를 고정한다.
@@ -150,7 +155,8 @@ sudo deploy/install.sh
 3. `ubuntu` 사용자로 `gh auth status`, `gh release list`
 4. `deploy/sonagi-graph-deploy.sh --check` (최신 `image-*` 태그 비교, 다운로드 없음)
 5. `zstd` 존재, 릴리스 자산 크기 확인, 디스크 여유(자산×3 + 2GB) 확인
-6. 모두 성공했을 때만 `/etc/systemd/system`에 유닛 복사, `daemon-reload`,
+6. 배포 스크립트/상태 헬퍼를 `/usr/local/lib/sonagi-graph-deploy`에 안정 사본으로 설치
+7. 모두 성공했을 때만 `/etc/systemd/system`에 유닛 복사, `daemon-reload`,
    `enable --now sonagi-graph-deploy.timer`
 
 하나라도 실패하면 유닛을 건드리지 않고 멈춘다.
@@ -271,6 +277,7 @@ GHCR read를 쓰려면 **classic PAT**(`read:packages`)가 필요하다.
 | 첫 배포 실패 후 서비스 down | 스크립트가 배포 전 실행 중이던 이미지로 자동 복구를 시도한다. 실패 시 `langgraph up --image sonagi-graph-langgraph-api:latest --no-pull` |
 | 그래프 수가 langgraph.json과 다름 | health 실패로 처리하고 직전 태그로 자동 롤백. 기대 수는 배포 클론의 `langgraph.json`에서 계산한다 |
 | 배포 클론 체크아웃 실패 | `sudo -u ubuntu git -C /home/ubuntu/sonagi-graph-deploy fetch origin master`. detached HEAD는 정상이다 |
+| `Bind for 0.0.0.0:5433 failed` | 배포 클론 안의 낡은 스크립트가 compose 프로젝트를 `sonagi-graph-deploy`로 잡은 경우. `systemctl cat sonagi-graph-deploy.service`의 `ExecStart`가 `/usr/local/lib/sonagi-graph-deploy/`인지 확인하고 `install.sh`를 다시 실행한다 |
 | 롤백도 실패 | `journalctl -u sonagi-graph-deploy.service`, `docker compose -p sonagi-graph ps` |
 
 ## 관련 파일

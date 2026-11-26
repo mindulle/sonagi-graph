@@ -291,5 +291,28 @@ class SourceContractTest(unittest.TestCase):
         self.assertIn('prepare_checkout "$ROLLBACK_TAG"', rollback)
 
 
+class ServiceUnitTest(unittest.TestCase):
+    def test_execstart_is_a_stable_copy_outside_the_clone(self):
+        unit = (SCRIPT.parent / "sonagi-graph-deploy.service").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "ExecStart=/usr/local/lib/sonagi-graph-deploy/sonagi-graph-deploy.sh", unit
+        )
+        self.assertIn("WorkingDirectory=/home/ubuntu/sonagi-graph-deploy", unit)
+        self.assertIn(
+            "Environment=SONAGI_GRAPH_REPO=/home/ubuntu/sonagi-graph-deploy", unit
+        )
+        # 배포 클론 안 스크립트를 직접 실행하면 낡은 커밋의 스크립트로
+        # 다음 회차가 시작할 수 있다.
+        self.assertNotIn("ExecStart=/home/ubuntu/sonagi-graph-deploy/deploy/", unit)
+
+    def test_installer_refreshes_the_stable_copy(self):
+        installer = (SCRIPT.parent / "install.sh").read_text(encoding="utf-8")
+        self.assertIn('TOOL_DIR="/usr/local/lib/sonagi-graph-deploy"', installer)
+        self.assertIn('"$TOOL_DIR/sonagi-graph-deploy.sh"', installer)
+        self.assertIn('"$TOOL_DIR/deploy_state.py"', installer)
+
+
 if __name__ == "__main__":
     sys.exit(unittest.main())
