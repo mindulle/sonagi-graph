@@ -203,6 +203,57 @@ def _collect_source_files(candidate: Dict[str, Any]) -> Optional[Dict[str, str]]
     return None
 
 
+_CSS_COLOR_ONLY_PROPS = frozenset(
+    {
+        "color",
+        "background",
+        "background-color",
+        "border-color",
+        "border-top-color",
+        "border-right-color",
+        "border-bottom-color",
+        "border-left-color",
+        "outline-color",
+        "text-decoration-color",
+        "caret-color",
+        "fill",
+        "stroke",
+    }
+)
+
+
+def _is_color_only_css_hover(lines: List[str], match_idx: int, max_scan_lines: int = 40) -> bool:
+    """CSS :hover 규칙 블록이 색상 관련 속성만 변경하면 True를 반환한다."""
+    chunk = "\n".join(lines[match_idx : min(len(lines), match_idx + max_scan_lines)])
+    brace_open = chunk.find("{")
+    if brace_open == -1:
+        return False
+    depth = 0
+    brace_close = -1
+    for i in range(brace_open, len(chunk)):
+        ch = chunk[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                brace_close = i
+                break
+    if brace_close == -1:
+        return False
+    body = chunk[brace_open + 1 : brace_close]
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    props: List[str] = []
+    for decl in body.split(";"):
+        decl = decl.strip()
+        if not decl or ":" not in decl:
+            continue
+        prop = decl.split(":", 1)[0].strip().lower()
+        if prop:
+            props.append(prop)
+    return bool(props) and all(p in _CSS_COLOR_ONLY_PROPS for p in props)
+
+
 def _evaluate_grep_rule(
     rule: Dict[str, Any],
     source_files: Dict[str, str],
@@ -259,6 +310,8 @@ def _evaluate_grep_rule(
                 window = "\n".join(lines[start:end])
                 if line_negate_re.search(window):
                     continue
+            if rule.get("ignore_color_only_css_hover") and _is_color_only_css_hover(lines, idx):
+                continue
             findings.append(
                 {
                     "rule_id": rule_id,
