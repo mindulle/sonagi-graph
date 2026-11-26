@@ -34,6 +34,11 @@ services:
       - /home/ubuntu/.local/share/fonts:/usr/share/fonts/local:ro
       - /usr/share/fonts:/usr/share/fonts:ro
       - /home/ubuntu/mindulle-design-system/packages/tokens:/home/ubuntu/mindulle-design-system/packages/tokens:ro
+      # brand profile은 mark_path로 브랜드 SVG 마스터를 읽는다. 예전에는 tokens만
+      # 마운트되어 실제 브랜드 파일을 쓰는 실행이 `mark_path 파일이 없다`로 죽었다.
+      - /home/ubuntu/mindulle-design-system/packages/brand-assets:/home/ubuntu/mindulle-design-system/packages/brand-assets:ro
+      # 콘테스트 브리프(JSON)와 사용자가 준 마크·이미지. 실행 전에 여기로 모아둔다.
+      - /home/ubuntu/briefs:/home/ubuntu/briefs:ro
       - /var/www/craft-suite:/var/www/craft-suite
       - /usr/local/bin/filmcraft-cli:/usr/local/bin/filmcraft-cli:ro
       - /usr/local/bin/effectcraft-cli:/usr/local/bin/effectcraft-cli:ro
