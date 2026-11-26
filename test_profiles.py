@@ -1604,6 +1604,259 @@ def test_label_origin_text_is_moved_away_from_mark():
     assert float(origin.get("y")) >= 6 + 6 + mark_size
 
 
+# ---------------------------------------------------------------------------
+# Print — 중간 밴드(GRAPH-31): 모티프·노트
+# ---------------------------------------------------------------------------
+
+
+def _label_svg_text(
+    *, mark: bool = False, ingredient_lines=("Camellia sinensis, bergamot", "oil")
+):
+    """render_label.py 90×120mm 출력을 흉내 낸 라벨 SVG.
+
+    좌표는 스크립트와 같은 안전 여백·재료 기준선·바코드 조용영역을 쓴다.
+    """
+    width = 90 * print_profile.MM
+    height = 120 * print_profile.MM
+    pad = print_profile.SAFE_PAD_MM * print_profile.MM
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.1f}" height="{height:.1f}">',
+        '<g id="art">',
+        f'<rect x="{pad:.1f}" y="{pad:.1f}" width="{width - 2 * pad:.1f}" height="4.5" fill="#1f4536"/>',
+        f'<text x="{pad:.1f}" y="{pad + 26:.1f}" font-family="Archivo" font-size="20" font-weight="700">Mindulle Tea</text>',
+        f'<text x="{pad:.1f}" y="{pad + 54:.1f}" font-family="Archivo" font-size="13" font-weight="700">Earl Grey 50g</text>',
+        f'<text x="{pad:.1f}" y="{pad + 74:.1f}" font-family="monospace" font-size="9" fill-opacity="0.7">50 g</text>',
+    ]
+    y = pad + 92
+    for line in ingredient_lines:
+        parts.append(
+            f'<text x="{pad:.1f}" y="{y:.1f}" font-family="monospace" font-size="8" '
+            f'fill-opacity="0.6">{line}</text>'
+        )
+        y += 11
+    if mark:
+        box = print_profile._mark_box(width, pad, True)
+        assert box is not None
+        parts.append(
+            f'<image id="mark" x="{box[0]:.1f}" y="{box[1]:.1f}" '
+            f'width="{box[2]:.1f}" height="{box[2]:.1f}"/>'
+        )
+    parts += [
+        '<g id="barcode">',
+        '<rect id="barcode-quiet" x="160.7" y="343.2" width="156.8" height="87.7"/>',
+        '<g id="barcode-bars"><rect x="178" y="360.6" width="2" height="52.9"/></g>',
+        '<text x="239.1" y="422.4" font-family="monospace" font-size="8" '
+        'text-anchor="middle">8800000000000</text>',
+        "</g>",
+        "</g></svg>",
+    ]
+    return "".join(parts)
+
+
+def _label_package(**overrides):
+    package = _package(size_mm=[90, 120], **overrides)
+    return print_profile.package_spec({"package": package})
+
+
+def _motif_group(svg_text):
+    import xml.etree.ElementTree as ET
+
+    root = ET.fromstring(svg_text)
+    return next(el for el in root.iter() if el.get("id") == "motif")
+
+
+def test_package_motif_defaults_to_auto_and_validates():
+    package = print_profile.package_spec({"package": _package()})
+    assert package["motif"] == "auto"
+    assert "notes" not in package
+    assert (
+        print_profile.package_spec({"package": _package(motif="none")})["motif"]
+        == "none"
+    )
+    assert (
+        print_profile.package_spec({"package": _package(motif=False)})["motif"]
+        == "none"
+    )
+    assert print_profile.package_spec(
+        {"package": _package(notes=" 첫 줄 \n\n 둘째 줄 ")}
+    )["notes"] == ["첫 줄", "둘째 줄"]
+    with pytest.raises(base.ProfileError) as exc:
+        print_profile.package_spec({"package": _package(motif="rings")})
+    assert "motif" in str(exc.value)
+    with pytest.raises(base.ProfileError):
+        print_profile.package_spec({"package": _package(notes=[1, 2])})
+
+
+def test_label_motif_none_reproduces_previous_layout():
+    svg = _label_svg_text()
+    package = _label_package(motif="none")
+    width = 90 * print_profile.MM
+    height = 120 * print_profile.MM
+
+    out, info = print_profile._inject_middle_art(svg, package, width, height)
+
+    assert out == svg
+    assert info is None
+    assert 'id="motif"' not in out
+
+
+def test_label_motif_stays_between_ingredients_and_barcode():
+    svg = _label_svg_text()
+    package = _label_package()
+    width = 90 * print_profile.MM
+    height = 120 * print_profile.MM
+    pad = print_profile.SAFE_PAD_MM * print_profile.MM
+
+    out, info = print_profile._inject_middle_art(svg, package, width, height)
+    group = _motif_group(out)
+    circles = [el for el in group if print_profile._local_name(el.tag) == "circle"]
+    rings = [el for el in circles if el.get("stroke")]
+    dots = [el for el in circles if el.get("fill")]
+
+    assert info is not None and info["mode"] == "motif"
+    assert 2 <= len(rings) <= 3
+    assert len(dots) == 1
+
+    left = min(float(el.get("cx")) - float(el.get("r")) for el in rings)
+    right = max(float(el.get("cx")) + float(el.get("r")) for el in rings)
+    top = min(float(el.get("cy")) - float(el.get("r")) for el in rings)
+    bottom = max(float(el.get("cy")) + float(el.get("r")) for el in rings)
+
+    # 6mm 안전 여백 안, 재료 마지막 줄 아래, 바코드 조용영역 위.
+    assert left >= pad
+    assert right <= width - pad
+    assert top >= pad + 92 + 11 + 8 * 0.25
+    assert bottom < 343.2
+    # 크기는 라벨 폭의 38~45%.
+    assert 0.38 * width <= right - left <= 0.45 * width + 0.1
+
+
+def test_label_motif_does_not_collide_with_mark_or_barcode(tmp_path):
+    mark = tmp_path / "mark.svg"
+    mark.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
+    svg = _label_svg_text(mark=True)
+    package = _label_package(mark_path=str(mark))
+    width = 90 * print_profile.MM
+    height = 120 * print_profile.MM
+
+    out, _ = print_profile._inject_middle_art(svg, package, width, height)
+    group = _motif_group(out)
+    rings = [
+        el
+        for el in group
+        if print_profile._local_name(el.tag) == "circle" and el.get("stroke")
+    ]
+    top = min(float(el.get("cy")) - float(el.get("r")) for el in rings)
+    bottom = max(float(el.get("cy")) + float(el.get("r")) for el in rings)
+
+    mark_bottom = 6 + 6 + print_profile.MARK_SIZE_MM * print_profile.MM
+    assert top >= mark_bottom
+    assert bottom < 343.2
+    assert 'id="mark"' in out
+
+
+def test_label_notes_render_at_most_three_lines_and_record_truncation():
+    import xml.etree.ElementTree as ET
+
+    svg = _label_svg_text()
+    package = _label_package(notes=["one", "two", "three", "four", "five"])
+    width = 90 * print_profile.MM
+    height = 120 * print_profile.MM
+
+    out, info = print_profile._inject_middle_art(svg, package, width, height)
+
+    assert 'id="motif"' not in out
+    assert info["mode"] == "notes"
+    assert info["truncated"] is True
+    assert info["dropped"] == 2
+    assert len(info["lines"]) == 3
+    root = ET.fromstring(out)
+    notes = next(el for el in root.iter() if el.get("id") == "notes")
+    texts = [el for el in notes if print_profile._local_name(el.tag) == "text"]
+    assert [el.text for el in texts][:2] == ["one", "two"]
+    assert texts[-1].text.endswith("…")
+    assert all(el.get("fill-opacity") == "0.75" for el in texts)
+
+
+def test_label_notes_wrap_before_truncating():
+    svg = _label_svg_text()
+    long_note = "차분한 오후를 위한 얼그레이 티 블렌드, 베르가못 향이 길게 남는다"
+    package = _label_package(notes=[long_note, long_note, long_note])
+    width = 90 * print_profile.MM
+    height = 120 * print_profile.MM
+
+    _, info = print_profile._inject_middle_art(svg, package, width, height)
+
+    assert len(info["lines"]) == 3
+    assert info["truncated"] is True
+    assert info["lines"][-1].endswith("…")
+
+
+def test_label_middle_is_deterministic_and_hash_driven(tmp_path, monkeypatch):
+    svg = _label_svg_text()
+    width = 90 * print_profile.MM
+    height = 120 * print_profile.MM
+    first = _label_package(brand="Mindulle Tea")
+    other = _label_package(brand="Sonagi Tea")
+
+    out_a, info_a = print_profile._inject_middle_art(svg, first, width, height)
+    out_b, _ = print_profile._inject_middle_art(svg, first, width, height)
+    out_c, info_c = print_profile._inject_middle_art(svg, other, width, height)
+
+    assert out_a == out_b
+    assert info_a == print_profile._inject_middle_art(svg, first, width, height)[1]
+    assert out_a != out_c
+    assert info_a["seed"] != info_c["seed"]
+
+    # 실제 render 경로도 같은 입력에 같은 SVG 바이트를 낸다.
+    _record_exec(monkeypatch, [], label_svg=svg)
+    profile = base.get_profile("print")
+    spec = _print_spec(package=_package(size_mm=[90, 120]))
+    variant = profile.plan({}, spec, [])[0]
+    run_a = profile.render(
+        variant, base.ProfileContext(run=print_profile._run, run_dir=tmp_path / "a")
+    )
+    run_b = profile.render(
+        variant, base.ProfileContext(run=print_profile._run, run_dir=tmp_path / "b")
+    )
+    assert Path(run_a["svg"]).read_bytes() == Path(run_b["svg"]).read_bytes()
+    manifest = json.loads(Path(run_a["manifest"]).read_text(encoding="utf-8"))
+    assert manifest["middle"]["mode"] == "motif"
+    assert 'id="motif"' in Path(run_a["svg"]).read_text(encoding="utf-8")
+
+
+def test_pouch_motif_uses_the_same_band_helper():
+    width = 90 * print_profile.MM
+    height = 120 * print_profile.MM
+    pad = print_profile.SAFE_PAD_MM * print_profile.MM
+
+    plain = print_profile.build_pouch_svg(
+        print_profile.package_spec(
+            {"package": _package(type="pouch", size_mm=[90, 120], motif="none")}
+        )
+    )
+    assert 'id="motif"' not in plain[0]
+    assert "middle" not in plain[1]
+
+    decorated = print_profile.build_pouch_svg(
+        print_profile.package_spec(
+            {"package": _package(type="pouch", size_mm=[90, 120])}
+        )
+    )
+    group = _motif_group(decorated[0])
+    rings = [
+        el
+        for el in group
+        if print_profile._local_name(el.tag) == "circle" and el.get("stroke")
+    ]
+    assert decorated[1]["middle"]["mode"] == "motif"
+    assert min(float(el.get("cx")) - float(el.get("r")) for el in rings) >= pad
+    assert max(float(el.get("cx")) + float(el.get("r")) for el in rings) <= width - pad
+    assert max(float(el.get("cy")) + float(el.get("r")) for el in rings) < (
+        height - pad - (14 * print_profile.MM + 2 * 4.6 * print_profile.MM)
+    )
+
+
 def test_print_pack_uses_preset_limits_naming_and_records_w8(tmp_path):
     spec = _loudsourcing_entry_spec()
     svg = tmp_path / "label.svg"
