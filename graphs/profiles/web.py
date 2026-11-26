@@ -24,12 +24,21 @@ from graphs.core import artifacts as core_artifacts
 from graphs.llm import chat_model
 from graphs.profiles import base
 from graphs.profiles import board as board_module
+from graphs.profiles import contact_sheet as contact_sheet_module
 from graphs.profiles import presets
+
+#: 변주 상한. 24가 기본이고, 대량 탐색(GRAPH-32)은 120까지 허용한다.
+DEFAULT_VARIANT_CAP = 24
+MAX_VARIANT_CAP = 120
+
+#: 콘택트 시트 썸네일 변환 크기. 긴 페이지는 높이 상한에 맞춰 더 줄어든다.
+CONTACT_THUMB_WIDTH = 320
+CONTACT_THUMB_HEIGHT = 420
 
 DEFAULT_SPEC: Dict[str, Any] = {
     "platform": "generic",
     "styles_per_direction": 2,
-    "variant_cap": 24,
+    "variant_cap": DEFAULT_VARIANT_CAP,
     "top_n": 9,
     "mockups": 3,
     "image_width": 2000,
@@ -39,6 +48,34 @@ DEFAULT_SPEC: Dict[str, Any] = {
 
 #: entry.md 경고 줄에 적는 스킵 경로 개수 상한.
 SKIP_WARNING_PATHS = 5
+
+
+def clamp_variant_cap(value: Any) -> Tuple[int, Optional[str]]:
+    """`spec.variant_cap`을 1~120으로 조정하고, 조정 사유를 함께 돌려준다.
+
+    잘못된 값은 실행을 실패시키지 않는다. 120을 넘으면 120으로 자르고,
+    정수가 아니면 기본값 24를 쓴다. 반환한 경고는 `validate`가 stderr와
+    `spec['warnings']`에 남긴다.
+    """
+    if value is None:
+        return DEFAULT_VARIANT_CAP, None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return (
+            DEFAULT_VARIANT_CAP,
+            f"variant_cap={value!r}은 정수가 아니다 — 기본값 "
+            f"{DEFAULT_VARIANT_CAP}을 쓴다",
+        )
+    if number < 1:
+        return 1, f"variant_cap={number}은 1보다 작다 — 1로 조정한다"
+    if number > MAX_VARIANT_CAP:
+        return (
+            MAX_VARIANT_CAP,
+            f"variant_cap={number}은 상한 {MAX_VARIANT_CAP}을 넘는다 — "
+            f"{MAX_VARIANT_CAP}으로 조정한다",
+        )
+    return number, None
 
 
 def aggregate_preflight(
@@ -255,6 +292,19 @@ class WebProfile:
     def defaults(self) -> Dict[str, Any]:
         return dict(DEFAULT_SPEC)
 
+    def validate(self, spec: Dict[str, Any]) -> None:
+        """변주 상한을 검증·조정한다(경고는 실행을 막지 않는다)."""
+        cap, warning = clamp_variant_cap(spec.get("variant_cap"))
+        spec["variant_cap"] = cap
+        if not warning:
+            return
+        warnings = spec.get("warnings")
+        if not isinstance(warnings, list):
+            warnings = []
+            spec["warnings"] = warnings
+        warnings.append(warning)
+        print(f"[web] 경고: {warning}", file=sys.stderr)
+
     def plan(
         self,
         ir: Mapping[str, Any],
@@ -293,6 +343,7 @@ class WebProfile:
                 variant["motifs"] = list(direction.get("motifs") or [])
                 per_direction.append(variant)
 
+        cap, _ = clamp_variant_cap(spec.get("variant_cap"))
         seen = set()
         variants = []
         for variant in per_direction:
@@ -301,7 +352,7 @@ class WebProfile:
                 continue
             seen.add(key)
             variants.append(variant)
-            if len(variants) >= int(spec.get("variant_cap", 24)):
+            if len(variants) >= cap:
                 break
         return variants
 
@@ -355,6 +406,50 @@ class WebProfile:
             "manifest": str(manifest) if manifest else None,
         }
 
+    def contact_sheet(
+        self,
+        renders: Sequence[Mapping[str, Any]],
+        spec: Mapping[str, Any],
+        state: Mapping[str, Any],
+        ctx: base.ProfileContext,
+    ) -> Dict[str, Any]:
+        """모든 렌더를 한 장으로 모은다(HITL 전에 사람이 눈으로 비교한다).
+
+        썸네일은 렌더 SVG를 셀 크기로 줄여 `thumbs/`에 쓰고, 시트는 실행 루트의
+        `contact-sheet.png`다. 변환은 결정론 렌더 파이프라인(`ctx.convert`)을
+        그대로 쓰므로 원격·로컬 어느 쪽이든 같은 규약이다.
+        """
+        run_dir = Path(ctx.run_dir or ctx.out_root)
+        thumb_dir = run_dir / "thumbs"
+        thumb_dir.mkdir(parents=True, exist_ok=True)
+
+        items: List[Dict[str, Any]] = []
+        for render in renders:
+            variant_id = str(render.get("id") or "variant")
+            png = thumb_dir / f"{variant_id}.png"
+            svg = render.get("svg")
+            if svg and Path(str(svg)).is_file():
+                ctx.convert(
+                    Path(str(svg)), png, CONTACT_THUMB_WIDTH, CONTACT_THUMB_HEIGHT
+                )
+            items.append(
+                {
+                    "id": variant_id,
+                    "png": str(png) if png.is_file() else None,
+                    "style": render.get("style"),
+                    "theme": render.get("theme"),
+                    "direction": render.get("direction"),
+                }
+            )
+
+        return contact_sheet_module.compose(
+            items,
+            out=run_dir / "contact-sheet.png",
+            run_id=str(state.get("run_id") or run_dir.name),
+            seed=str(spec.get("seed") or ""),
+            brief=str(state.get("brief") or state.get("content") or ""),
+        )
+
     def gates(self) -> List[base.Gate]:
         """web은 그래프의 critic/gate가 판정한다(profile 전용 하드 게이트 없음)."""
         return []
@@ -381,6 +476,7 @@ class WebProfile:
         board_enabled = preset.board if board_spec is None else bool(board_spec)
         options = {o["id"]: o for o in state.get("options") or []}
         skipped_assets, preflight = aggregate_preflight(items)
+        contact_sheet_path = state.get("contact_sheet")
 
         packed: List[Dict[str, Any]] = []
         for index, render in enumerate(items, start=1):
@@ -440,6 +536,7 @@ class WebProfile:
             "rendered_total": len(state.get("renders") or []),
             "selected_total": len(packed),
             "board": board_row,
+            "contact_sheet": contact_sheet_path,
             "skipped_assets": skipped_assets,
             "preflight": preflight,
             "items": packed,
@@ -451,6 +548,8 @@ class WebProfile:
         lines = [f"# 엔트리 팩 — {spec.get('platform')}", ""]
         if skipped_assets:
             lines += [skip_warning_line(skipped_assets), ""]
+        if contact_sheet_path and Path(str(contact_sheet_path)).is_file():
+            lines += [f"- 콘택트 시트: `{Path(str(contact_sheet_path)).name}`", ""]
         if board_row:
             lines += [
                 f"- 보드: `board.png` ({board_row['width']}×{board_row['height']}, "
@@ -479,6 +578,8 @@ class WebProfile:
                 artifact_paths.append(item["jpg"])
         if board_row:
             artifact_paths.append(board_row["path"])
+        if contact_sheet_path:
+            artifact_paths.append(contact_sheet_path)
         artifact_paths += [pack_dir / "meta.json", pack_dir / "entry.md"]
         manifest = base.run_manifest(
             state,
@@ -500,6 +601,7 @@ class WebProfile:
             "meta": str(pack_dir / "meta.json"),
             "manifest": str(manifest_path),
             "manifest_digest": core_artifacts.manifest_digest(manifest),
+            "contact_sheet": contact_sheet_path,
             "skipped_assets": skipped_assets,
             "preflight": preflight,
         }
