@@ -272,3 +272,122 @@ def rank_options(
             "recent_tags": dict(recent_tags),
         },
     }
+
+
+def _one_line_reason(
+    option: Mapping[str, Any],
+    *,
+    score: float,
+    confidence: str,
+    decisions_count: int,
+    style_rates: Mapping[str, float],
+    tag_weights: Mapping[str, float],
+) -> str:
+    """HITL 옵션 카드에 붙일 한 줄 추천 이유를 만든다."""
+    prefix = f"초기({confidence}, {decisions_count}건)" if confidence == "early" else f"취향({decisions_count}건)"
+    if decisions_count == 0 or score <= 0.0:
+        return f"{prefix} — 취향 신호가 없어 기본 품질 순으로 배치했습니다"
+    parts: List[str] = []
+    style = str(option.get("style") or "")
+    if style and style in style_rates:
+        parts.append(f"{style} 승률 {style_rates[style]:.2f}")
+    matched_tags = [t for t in _option_tags(option) if t in tag_weights]
+    if matched_tags:
+        parts.append("'" + "', '".join(matched_tags[:2]) + "' 태그 일치")
+    if not parts:
+        parts.append("특징 편향 점수 반영")
+    return f"{prefix} — {', '.join(parts)} 추천"
+
+
+def rank_top_options(
+    options: Sequence[Mapping[str, Any]],
+    profile: Optional[Mapping[str, Any]] = None,
+    decisions: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """상위 N개 후보의 순서만 취향으로 재정렬하고 추천 이유와 A/B 전후 비교를 붙인다.
+
+    생성 단계는 건드리지 않고, 이미 추려진 상위 N개 목록에만 적용한다.
+    취향 점수가 모두 0이면 원래 순서를 그대로 유지한다.
+    """
+    items = [dict(o) for o in options]
+    before_top3 = [str(o.get("id") or "") for o in items[:3]]
+    if not items:
+        return {
+            "options": [],
+            "confidence": "early",
+            "decisions": 0,
+            "explanations": ["후보가 없습니다."],
+            "ab": {
+                "before_top3": [],
+                "after_top3": [],
+                "overlap_rate": 1.0,
+            },
+        }
+
+    result = rank_options(items, profile=profile, decisions=decisions)
+    scores = result["scores"]
+    confidence = result["confidence"]
+    decisions_count = result["decisions"]
+    basis = result["basis"]
+    style_rates = basis["style_winrate"]
+    tag_weights = basis["tag_weights"]
+
+    has_signal = decisions_count > 0 and any(v > 0.0 for v in scores.values())
+    if has_signal:
+        ordered = [
+            item
+            for _idx, item in sorted(
+                enumerate(items),
+                key=lambda pair: (-scores.get(str(pair[1].get("id") or ""), 0.0), pair[0]),
+            )
+        ]
+    else:
+        ordered = items
+
+    for opt in ordered:
+        oid = str(opt.get("id") or "")
+        sc = float(scores.get(oid, 0.0))
+        opt["taste_score"] = sc
+        opt["taste_confidence"] = confidence
+        opt["recommendation_reason"] = _one_line_reason(
+            opt,
+            score=sc,
+            confidence=confidence,
+            decisions_count=decisions_count,
+            style_rates=style_rates,
+            tag_weights=tag_weights,
+        )
+
+    after_top3 = [str(o.get("id") or "") for o in ordered[:3]]
+    overlap = len(set(before_top3) & set(after_top3)) / max(1, len(before_top3))
+    return {
+        "options": ordered,
+        "confidence": confidence,
+        "decisions": decisions_count,
+        "explanations": result["explanations"],
+        "ab": {
+            "before_top3": before_top3,
+            "after_top3": after_top3,
+            "overlap_rate": round(overlap, 4),
+            "confidence": confidence,
+        },
+    }
+
+
+def evaluate_top3_agreement(
+    ab_record: Mapping[str, Any],
+    selection: Sequence[str],
+) -> Dict[str, Any]:
+    """취향 반영 전후 top-3와 실제 사람 선택의 일치율을 기록한다."""
+    before = list(ab_record.get("before_top3") or ())
+    after = list(ab_record.get("after_top3") or ())
+    picked = {str(s) for s in selection if str(s)}
+    if not picked:
+        return dict(ab_record)
+    before_hits = sum(1 for item in before if item in picked)
+    after_hits = sum(1 for item in after if item in picked)
+    out = dict(ab_record)
+    out["selection"] = sorted(picked)
+    out["before_hit_rate"] = round(before_hits / len(picked), 4)
+    out["after_hit_rate"] = round(after_hits / len(picked), 4)
+    return out
