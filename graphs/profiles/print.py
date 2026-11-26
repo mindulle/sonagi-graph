@@ -66,6 +66,7 @@ from graphs.core import artifacts as core_artifacts
 from graphs.core import env as core_env
 from graphs.core import exec as core_exec
 from graphs.profiles import base
+from graphs.profiles import presets as profile_presets
 
 MM = 96 / 25.4  # 1mm = 3.7795px
 PACKAGE_TYPES = ("label", "pouch")
@@ -991,6 +992,12 @@ class PrintProfile:
         width = int(spec.get("image_width", 2000))
         max_height = int(spec.get("max_height", 3000))
         quality = int(spec.get("jpg_quality", 90))
+        if spec.get("platform"):
+            # 플랫폼을 명시한 인쇄 엔트리도 같은 프리셋 상한을 따른다(보드는 web 전용).
+            preset, _ = profile_presets.resolve_for_spec(spec)
+            width = int(spec.get("image_width") or preset.image_width)
+            max_height = int(spec.get("max_height") or preset.max_height)
+            quality = int(spec.get("jpg_quality") or preset.jpg_quality)
         bleed = float(spec.get("bleed_mm", BLEED_MM))
         # 테스트 우회는 명시적 bool true만 — 문자열 "false"가 게이트를 끄지 않게 한다.
         allow = spec.get("allow_print_checks") is True

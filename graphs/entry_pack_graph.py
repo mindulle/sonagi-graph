@@ -74,6 +74,7 @@ from graphs.core import env as core_env  # noqa: E402
 from graphs.core import exec as core_exec  # noqa: E402
 from graphs.llm import chat_model  # noqa: E402
 from graphs.profiles import base as profiles_base  # noqa: E402
+from graphs.profiles import presets as profile_presets  # noqa: E402
 from graphs.profiles.base import svg_size as _svg_size  # noqa: E402
 from graphs.profiles.base import svg_width as _svg_width  # noqa: E402
 from graphs.profiles.web import WebProfile  # noqa: E402
@@ -186,6 +187,9 @@ def spec_node(state: EntryState) -> Dict[str, Any]:
         spec["themes"] = ["light", "dark"] if spec["media"] == "web" else ["light"]
     if "breakpoints" not in spec:
         spec["breakpoints"] = ["desktop"] if spec["media"] == "web" else ["mobile"]
+    # 플랫폼을 명시했을 때만 프리셋을 병합한다 — platform 없는 web/print 기본 동작 불변.
+    if raw_spec.get("platform"):
+        spec, _, _ = profile_presets.apply(spec)
     if not spec.get("seed"):
         spec["seed"] = hashlib.sha1(str(raw).encode("utf-8")).hexdigest()[:8]
     # 선택 훅: profile이 입력을 먼저 검증하면 knowledge·LLM 호출 전에 멈춘다.

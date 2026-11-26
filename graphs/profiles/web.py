@@ -23,6 +23,8 @@ from graphs.adapters import remote_assets
 from graphs.core import artifacts as core_artifacts
 from graphs.llm import chat_model
 from graphs.profiles import base
+from graphs.profiles import board as board_module
+from graphs.profiles import presets
 
 DEFAULT_SPEC: Dict[str, Any] = {
     "platform": "generic",
@@ -312,19 +314,27 @@ class WebProfile:
         pack_dir = run_dir / "pack"
         pack_dir.mkdir(parents=True, exist_ok=True)
 
-        width = int(spec.get("image_width", 2000))
-        max_height = int(spec.get("max_height", 3000))
-        quality = int(spec.get("jpg_quality", 90))
+        # 프리셋 해석: spec 값 → platform 프리셋 → generic. spec이 항상 이긴다.
+        preset, preset_warnings = presets.resolve_for_spec(spec)
+        width = int(spec.get("image_width") or preset.image_width)
+        max_height = int(spec.get("max_height") or preset.max_height)
+        quality = int(spec.get("jpg_quality") or preset.jpg_quality)
+        formats = presets.formats_for_spec(spec, preset)
+        naming = str(spec.get("naming") or preset.naming)
+        board_spec = spec.get("board")
+        board_enabled = preset.board if board_spec is None else bool(board_spec)
         options = {o["id"]: o for o in state.get("options") or []}
 
         packed: List[Dict[str, Any]] = []
-        for render in items:
+        for index, render in enumerate(items, start=1):
             variant_id = render["id"]
             svg = Path(render["svg"])
-            png = pack_dir / f"{variant_id}.png"
-            jpg = pack_dir / f"{variant_id}.jpg"
+            stem = presets.filename(naming, variant_id, index)
+            png = pack_dir / f"{stem}.png"
+            jpg = pack_dir / f"{stem}.jpg"
             ctx.convert(svg, png, width, max_height)
-            ctx.jpeg(png, jpg, quality)
+            if "jpg" in formats:
+                ctx.jpeg(png, jpg, quality)
             option = options.get(variant_id) or render
             packed.append(
                 {
@@ -334,22 +344,45 @@ class WebProfile:
                     "theme": render.get("theme"),
                     "svg": str(svg),
                     "png": str(png),
-                    "jpg": str(jpg),
+                    "jpg": str(jpg) if jpg.is_file() else None,
                     "png_size": png.stat().st_size,
-                    "jpg_size": jpg.stat().st_size,
+                    "jpg_size": jpg.stat().st_size if jpg.is_file() else 0,
                     "sha256": core_artifacts.sha256_file(png),
                     "description": _describe(state, option),
                 }
             )
 
+        # 엔트리 보드 — 프리셋이 요구할 때만. 선택 1순위 엔트리를 표지로 쓴다.
+        board_row: Optional[Dict[str, Any]] = None
+        if board_enabled and packed:
+            first = packed[0]
+            board_path = pack_dir / "board.png"
+            board_row = board_module.compose(
+                image=Path(first["png"]),
+                out=board_path,
+                platform=spec.get("platform") or preset.id,
+                direction=str(first.get("direction") or ""),
+                style=str(first.get("style") or ""),
+                theme=str(first.get("theme") or ""),
+                description=str(first.get("description") or ""),
+                entry_id=str(first["id"]),
+            )
+
         meta = {
             "platform": spec.get("platform"),
+            "preset": preset.id,
+            "preset_warnings": preset_warnings,
             "brief": state.get("brief", ""),
             "seed": spec.get("seed"),
             "image_width": width,
+            "max_height": max_height,
+            "jpg_quality": quality,
+            "formats": list(formats),
+            "naming": naming,
             "variants_total": len(state.get("variants") or []),
             "rendered_total": len(state.get("renders") or []),
             "selected_total": len(packed),
+            "board": board_row,
             "items": packed,
         }
         (pack_dir / "meta.json").write_text(
@@ -357,13 +390,21 @@ class WebProfile:
         )
 
         lines = [f"# 엔트리 팩 — {spec.get('platform')}", ""]
+        if board_row:
+            lines += [
+                f"- 보드: `board.png` ({board_row['width']}×{board_row['height']}, "
+                f"{board_row['bytes']:,}B)",
+                "",
+            ]
         for item in packed:
             lines += [
                 f"## {item['id']}",
                 f"- 방향: {item['direction']}",
                 f"- 스타일: {item['style']} ({item['theme']})",
                 f"- PNG: `{Path(item['png']).name}` ({item['png_size']:,}B)",
-                f"- JPG: `{Path(item['jpg']).name}` ({item['jpg_size']:,}B)",
+                f"- JPG: `{Path(item['jpg']).name}` ({item['jpg_size']:,}B)"
+                if item.get("jpg")
+                else "- JPG: 없음(프리셋 형식에 포함되지 않음)",
                 "",
                 item["description"],
                 "",
@@ -372,7 +413,11 @@ class WebProfile:
 
         artifact_paths: List[Any] = []
         for item in packed:
-            artifact_paths += [item["svg"], item["png"], item["jpg"]]
+            artifact_paths += [item["svg"], item["png"]]
+            if item.get("jpg"):
+                artifact_paths.append(item["jpg"])
+        if board_row:
+            artifact_paths.append(board_row["path"])
         artifact_paths += [pack_dir / "meta.json", pack_dir / "entry.md"]
         manifest = base.run_manifest(
             state,
