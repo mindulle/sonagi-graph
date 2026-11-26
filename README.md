@@ -99,6 +99,19 @@ sudo mkdir -p /usr/share/fonts/local
 langgraph up -p 8123 --recreate -d docker-compose.deploy.yml
 ```
 
+`langgraph up`은 **attached로 뜬다**(위 `-d`는 detach가 아니라 compose 오버레이 경로다).
+그 프로세스가 끝나면(셸·세션 종료, SIGINT) 스택도 같이 내려간다. 오래 띄워 둘 때는
+분리해서 실행한다.
+
+```bash
+setsid nohup langgraph up -p 8123 --recreate -d docker-compose.deploy.yml \
+  > /tmp/langgraph_up.log 2>&1 &
+
+# 이미 만들어진 스택을 다시 올릴 때(재빌드 없음)
+docker start sonagi-graph-langgraph-postgres-1 sonagi-graph-langgraph-redis-1
+docker start sonagi-graph-langgraph-api-1
+```
+
 호스트 서비스(CLIProxyAPI `:38107`, SearXNG `:8080`)는 Docker 브릿지 IP(`172.19.0.1`)로 접근한다.
 컨테이너는 root로 돌기 때문에 마운트된 볼트·CDN에 root 소유 파일이 생긴다(필요하면 `chown`).
 
