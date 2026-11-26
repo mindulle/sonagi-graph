@@ -31,11 +31,13 @@ from graphs.profiles.base import (
 )
 from graphs.profiles.brand import BrandProfile, BrandGateError
 from graphs.profiles.print import PrintGateError, PrintProfile
+from graphs.profiles.social import SocialGateError, SocialProfile
 from graphs.profiles.web import WebProfile
 
 register(WebProfile())
 register(PrintProfile())
 register(BrandProfile())
+register(SocialProfile())
 
 __all__ = [
     "BrandGateError",
@@ -49,6 +51,8 @@ __all__ = [
     "Profile",
     "ProfileContext",
     "ProfileError",
+    "SocialGateError",
+    "SocialProfile",
     "WebProfile",
     "artifact_entry",
     "collect_artifacts",
