@@ -25,14 +25,17 @@ brief hash + index ──seed──▶ 파라미터(링 수·획 단위·씨앗 
   원형에는 광학 오버슈트를 주며, 색은 잉크·악센트·종이 셋뿐이다(그라디언트 금지).
 - **자동 선택 없음.** 후보는 HITL에 전부 올리고 사람이 고른다(profile 쪽 규칙).
 
-가족 넷:
+가족 셋 — 모두 같은 인장의 변주다. 바깥 링 골격은 후보마다 그대로 남는다:
 
 | 가족 | 원본에서 물려받는 것 | 바꾸는 것 |
 | --- | --- | --- |
 | `seal-refined` | 링 비율·방사 각도·코어 | 마이크로 디테일 제거, 링 수·획 굵기 |
-| `monogram-in-seal` | 링 골격 | 브랜드 이름 첫 글자를 중앙에 광학 정렬 |
-| `abstract-dandelion` | 방사 각도·줄기 길이 | 씨앗 밀도·줄기 굽힘·깃털 |
-| `negative-cut` | 인장 원판 비율 | 씨앗 모양을 evenodd로 파냄(컷 깊이) |
+| `seal-monogram` | 링 골격·코어 위치 | 이름 머리글자를 중앙에 광학 정렬 |
+| `seal-dandelion` | 방사 각도·줄기 길이 | 씨앗 밀도·줄기 굽힘·깃털 |
+
+음각(`negative-cut`)은 **네 번째 가족이 아니라 수정자**다. 세 가족의 중심부를
+원판 + 구멍(nonzero)으로 바꾸되 바깥 인장 링은 건드리지 않는다. 그래서 어떤
+후보도 글자만·별만 남은 새 로고가 아니라 "같은 인장의 다른 정련"으로 읽힌다.
 """
 
 from __future__ import annotations
@@ -53,10 +56,12 @@ CENTER = ARTBOARD / 2.0
 #: 후보 가족. 기본값은 이 순서를 그대로 돌려 쓴다(같은 가족이 몰리지 않게).
 FAMILIES: Tuple[str, ...] = (
     "seal-refined",
-    "monogram-in-seal",
-    "abstract-dandelion",
-    "negative-cut",
+    "seal-monogram",
+    "seal-dandelion",
 )
+
+#: 가족 위에 얹는 수정자. 음각은 네 번째 가족이 아니라 1~3의 변형이다.
+MODIFIERS: Tuple[str, ...] = ("none", "negative-cut")
 
 #: refine 모드의 후보 수 계약(8~12). v1 explore의 2~12와 다르다.
 MIN_CANDIDATES = 8
@@ -490,20 +495,319 @@ def _path(d: str, *, fill: str, fill_rule: Optional[str] = None) -> Dict[str, An
     return shape
 
 
-def _family_seal(
-    model: SourceModel, rng: brand_marks.Rng, params: Dict[str, Any]
+def _frame(
+    model: SourceModel, params: Dict[str, Any], *, minimum: int = 2
 ) -> List[Dict[str, Any]]:
-    """seal-refined — 인장 골격만 남긴다. 유리 돔·각인·미세선은 버린다."""
+    """모든 가족이 공유하는 인장 골격 — 원본 링 비율의 바깥 이중 링 + 안쪽 링.
+
+    세 가족 모두 이 골격을 **먼저** 그린다. 한눈에 같은 인장 가족으로 읽히게
+    하는 최소 조건이고, 테스트도 후보마다 이 링을 확인한다.
+    """
     unit = params["stroke_unit"]
-    rings, weights = _ring_plan(
-        model, params["ring_count"], unit, params["overshoot_px"]
-    )
+    count = max(int(minimum), int(params["ring_count"]))
+    rings, weights = _ring_plan(model, count, unit, params["overshoot_px"])
+    params["ring_count"] = count
     params["ring_radii"] = rings
     params["ring_weights"] = weights
-    shapes = [
+    return [
         _circle(radius, stroke="ink", width=weight)
         for radius, weight in zip(rings, weights)
     ]
+
+
+def _inner_field(params: Mapping[str, Any]) -> float:
+    """가장 안쪽 링 안에서 실제로 그림을 그릴 수 있는 반지름(획 절반 + 호흡 제외)."""
+    radii = list(params.get("ring_radii") or [])
+    weights = list(params.get("ring_weights") or [])
+    if not radii:
+        return OUTER_RADIUS * 0.60
+    half = (weights[-1] / 2.0) if weights else 0.0
+    return max(24.0, float(radii[-1]) - half - float(params["stroke_unit"]) * 1.5)
+
+
+# ---------------------------------------------------------------------------
+# 음각(negative-space) — 가족 위에 얹는 수정자
+# ---------------------------------------------------------------------------
+
+
+def _polygon_area(points: Sequence[Tuple[float, float]]) -> float:
+    total = 0.0
+    for index, (x1, y1) in enumerate(points):
+        x2, y2 = points[(index + 1) % len(points)]
+        total += x1 * y2 - x2 * y1
+    return total / 2.0
+
+
+def _oriented(
+    points: Sequence[Tuple[float, float]], *, clockwise: bool
+) -> List[Tuple[float, float]]:
+    rows = [(float(x), float(y)) for x, y in points]
+    return rows if (_polygon_area(rows) > 0) == clockwise else list(reversed(rows))
+
+
+def _polygon_d(points: Sequence[Tuple[float, float]], *, clockwise: bool) -> str:
+    rows = _oriented(points, clockwise=clockwise)
+    head = f"M {_n(rows[0][0])} {_n(rows[0][1])}"
+    body = "".join(f" L {_n(x)} {_n(y)}" for x, y in rows[1:])
+    return f"{head}{body} Z"
+
+
+def _disc_points(radius: float, steps: int = 72) -> List[Tuple[float, float]]:
+    return [
+        (
+            CENTER + radius * math.cos(2.0 * math.pi * index / steps),
+            CENTER + radius * math.sin(2.0 * math.pi * index / steps),
+        )
+        for index in range(steps)
+    ]
+
+
+def _cubic_points(
+    p0: Tuple[float, float],
+    p1: Tuple[float, float],
+    p2: Tuple[float, float],
+    p3: Tuple[float, float],
+    steps: int = 18,
+) -> List[Tuple[float, float]]:
+    rows: List[Tuple[float, float]] = []
+    for index in range(steps + 1):
+        t = index / steps
+        u = 1.0 - t
+        rows.append(
+            (
+                u**3 * p0[0]
+                + 3 * u * u * t * p1[0]
+                + 3 * u * t * t * p2[0]
+                + t**3 * p3[0],
+                u**3 * p0[1]
+                + 3 * u * u * t * p1[1]
+                + 3 * u * t * t * p2[1]
+                + t**3 * p3[1],
+            )
+        )
+    return rows
+
+
+def _seed_outline(height: float, width: float) -> List[Tuple[float, float]]:
+    """씨앗(티어드롭) 외곽선. 위는 뾰족하고 아래는 둥글다."""
+    tip = (CENTER, CENTER - height * 0.62)
+    bottom = (CENTER, CENTER + height * 0.38)
+    right_controls = (
+        (CENTER + width * 0.55, CENTER - height * 0.30),
+        (CENTER + width * 0.55, CENTER + height * 0.20),
+    )
+    left_controls = (
+        (CENTER - width * 0.55, CENTER + height * 0.20),
+        (CENTER - width * 0.55, CENTER - height * 0.30),
+    )
+    right = _cubic_points(tip, *right_controls, bottom)
+    left = _cubic_points(bottom, *left_controls, tip)
+    return right + left[1:-1]
+
+
+def _ray_hole(
+    angle: float, start_radius: float, end_radius: float, width: float
+) -> List[Tuple[float, float]]:
+    radians = math.radians(angle)
+    start = (
+        CENTER + start_radius * math.cos(radians),
+        CENTER + start_radius * math.sin(radians),
+    )
+    end = (
+        CENTER + end_radius * math.cos(radians),
+        CENTER + end_radius * math.sin(radians),
+    )
+    return brand_marks._segment_quad(start, end, width)
+
+
+def _cross(
+    a: Tuple[float, float], b: Tuple[float, float], c: Tuple[float, float]
+) -> float:
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _convex_intersection(
+    subject: Sequence[Tuple[float, float]], clip: Sequence[Tuple[float, float]]
+) -> List[Tuple[float, float]]:
+    """두 볼록 다각형의 교집합(Sutherland–Hodgman). 획이 만나는 조인트 보정용."""
+    if len(subject) < 3 or len(clip) < 3:
+        return []
+    clip_rows = _oriented(clip, clockwise=True)
+    sign = 1.0 if _polygon_area(clip_rows) > 0 else -1.0
+    output = [(float(x), float(y)) for x, y in subject]
+    for index, start in enumerate(clip_rows):
+        end = clip_rows[(index + 1) % len(clip_rows)]
+        if not output:
+            break
+        source = output
+        output = []
+        for position, current in enumerate(source):
+            previous = source[position - 1]
+            current_in = sign * _cross(start, end, current) >= -1e-9
+            previous_in = sign * _cross(start, end, previous) >= -1e-9
+            if current_in:
+                if not previous_in:
+                    output.append(_line_intersection(previous, current, start, end))
+                output.append(current)
+            elif previous_in:
+                output.append(_line_intersection(previous, current, start, end))
+    return [(round(x, 3), round(y, 3)) for x, y in output if len(output) >= 3]
+
+
+def _line_intersection(
+    p1: Tuple[float, float],
+    p2: Tuple[float, float],
+    p3: Tuple[float, float],
+    p4: Tuple[float, float],
+) -> Tuple[float, float]:
+    x1, y1 = p1
+    x2, y2 = p2
+    x3, y3 = p3
+    x4, y4 = p4
+    denominator = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if abs(denominator) < 1e-12:
+        return p2
+    t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denominator
+    return (x1 + t * (x2 - x1), y1 + t * (y2 - y1))
+
+
+def _overlap_fillers(
+    quads: Sequence[Sequence[Tuple[float, float]]]
+) -> List[List[Tuple[float, float]]]:
+    """겹치는 구멍끼리의 교집합을 +1 도형으로 돌려준다.
+
+    nonzero 채우기에서 구멍 둘이 겹치면 권선이 -2가 되어 다시 채워진다(조인트의
+    검은 마름모). 교집합을 원판과 같은 방향(+1)으로 더하면 -2+1=-1이 되어
+    진짜 구멍이 유지된다. 글자 조인트를 깨끗하게 만드는 보정이다.
+    """
+    rows: List[List[Tuple[float, float]]] = []
+    for first in range(len(quads)):
+        for second in range(first + 1, len(quads)):
+            overlap = _convex_intersection(quads[first], quads[second])
+            if len(overlap) >= 3 and abs(_polygon_area(overlap)) > 0.5:
+                rows.append(overlap)
+    return rows
+
+
+def _carved(
+    radius: float,
+    holes: Sequence[Sequence[Tuple[float, float]]],
+    fillers: Sequence[Sequence[Tuple[float, float]]] = (),
+) -> Dict[str, Any]:
+    """원판을 칠하고 구멍들을 반대 방향으로 빼서 진짜 음각을 만든다(nonzero).
+
+    evenodd는 구멍끼리 겹치면 다시 채워지고, nonzero는 같은 방향 구멍이
+    합집합으로 비워진다. 그래서 원판은 시계, 구멍은 전부 반시계로 맞춘다.
+    `fillers`는 겹친 구멍의 교집합 보정으로, 원판과 같은 방향이다.
+    """
+    parts = [_polygon_d(_disc_points(radius), clockwise=True)]
+    parts += [_polygon_d(hole, clockwise=False) for hole in holes if len(hole) >= 3]
+    parts += [_polygon_d(filler, clockwise=True) for filler in fillers if len(filler) >= 3]
+    return _path(" ".join(parts), fill="ink", fill_rule="nonzero")
+
+
+def _cut_meta(params: Dict[str, Any], **values: Any) -> None:
+    meta = {"modifier": "negative-cut", **values}
+    params["cut"] = meta
+
+
+def _modified_cut(
+    family: str, model: SourceModel, params: Dict[str, Any], rng: brand_marks.Rng
+) -> List[Dict[str, Any]]:
+    """가족 1~3의 중심부를 원판 + 음각으로 바꾼다. 바깥 인장 링은 그대로 둔다."""
+    unit = params["stroke_unit"]
+    field = _inner_field(params)
+    radius = field * 0.94
+    holes: List[List[Tuple[float, float]]] = []
+    shapes: List[Dict[str, Any]] = []
+
+    if family == "seal-refined":
+        core = OUTER_RADIUS * model.core_ratio
+        reach = min(
+            field * 0.62,
+            OUTER_RADIUS * model.ray_length_ratio * params["reach_factor"],
+        )
+        holes.append(_disc_points(core * 0.45))
+        for angle in _ray_angles(model, params["seed_count"], params["phase_shift"]):
+            holes.append(_ray_hole(angle, core * 0.62, reach, unit))
+        for angle in _ray_angles(model, params["seed_count"], params["phase_shift"]):
+            radians = math.radians(angle)
+            shapes.append(
+                _circle(
+                    params["seed_dot"],
+                    cx=CENTER + reach * math.cos(radians),
+                    cy=CENTER + reach * math.sin(radians),
+                    fill="accent",
+                )
+            )
+        _cut_meta(
+            params,
+            shape="sunburst",
+            radius=round(radius, 3),
+            holes=len(holes),
+            reach=round(reach, 3),
+        )
+    elif family == "seal-monogram":
+        mono = params.get("monogram") or {}
+        quads = [
+            brand_marks._segment_quad(
+                (x1, y1), (x2, y2), float(mono.get("weight") or unit)
+            )
+            for x1, y1, x2, y2 in mono.get("segments") or []
+        ]
+        holes.extend(quads)
+        shapes.append(
+            _circle(
+                unit * 0.9,
+                cx=CENTER,
+                cy=CENTER + field * 0.80,
+                fill="accent",
+            )
+        )
+        _cut_meta(
+            params,
+            shape="monogram",
+            radius=round(radius, 3),
+            holes=len(holes),
+            glyph=(params.get("monogram") or {}).get("glyph"),
+        )
+    else:
+        height = min(
+            field * 1.02,
+            OUTER_RADIUS * params["cut_depth"] * 2.0,
+        )
+        width = height * 0.42
+        holes.append(_seed_outline(height, width))
+        start = abs(CENTER - (CENTER - height * 0.62)) + unit * 1.6
+        reach = radius - unit * 1.5
+        for angle in _ray_angles(model, params["seed_count"], params["phase_shift"]):
+            holes.append(_ray_hole(angle, start, reach, unit * 1.5))
+        shapes.append(
+            _circle(unit * 0.9, cx=CENTER, cy=CENTER + height * 0.58, fill="accent")
+        )
+        _cut_meta(
+            params,
+            shape="seed-rays",
+            radius=round(radius, 3),
+            holes=len(holes),
+            height=round(height, 3),
+        )
+
+    fillers = _overlap_fillers(holes) if family == "seal-monogram" else []
+    shapes.insert(0, _carved(radius, holes, fillers))
+    return shapes
+
+
+def _family_seal(
+    model: SourceModel, rng: brand_marks.Rng, params: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """seal-refined — 원본 인장에서 가장 가까운 가족. 골격은 그대로, 디테일만 덜어낸다."""
+    unit = params["stroke_unit"]
+    shapes = _frame(model, params, minimum=2)
+
+    if params["modifier"] == "negative-cut":
+        shapes += _modified_cut("seal-refined", model, params, rng)
+        return shapes
 
     seed_count = params["seed_count"]
     reach = OUTER_RADIUS * model.ray_length_ratio * params["reach_factor"]
@@ -521,37 +825,26 @@ def _family_seal(
     # 코어 — 원본의 황금 심장을 두 겹 원으로 단순화한다.
     shapes.append(_circle(core, stroke="ink", width=params["weights"][1]))
     shapes.append(_circle(core * 0.52, fill="accent"))
+    params["reach"] = round(reach, 3)
+    params["core_radius"] = round(core, 3)
     return shapes
 
 
 def _family_monogram(
     model: SourceModel, rng: brand_marks.Rng, params: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
-    """monogram-in-seal — 인장 안쪽에 이름 머리글자를 광학 정렬해 앉힌다."""
+    """seal-monogram — 인장 링은 그대로 두고 이름 머리글자만 중앙에 앉힌다."""
     unit = params["stroke_unit"]
-    # 모노그램은 글자가 들어갈 안쪽 필드가 필요하다 — 이중 링만으로는 좁다.
-    params["ring_count"] = max(3, int(params["ring_count"]))
-    rings, weights = _ring_plan(
-        model, params["ring_count"], unit, params["overshoot_px"]
-    )
-    params["ring_radii"] = rings
-    params["ring_weights"] = weights
-    shapes = [
-        _circle(radius, stroke="ink", width=weight)
-        for radius, weight in zip(rings, weights)
-    ]
+    shapes = _frame(model, params, minimum=3)
 
     glyph = params["glyph"]
     weight = params["glyph_weight"]
-    inner = rings[-1] if rings else OUTER_RADIUS * 0.72
+    inner = _inner_field(params)
     box = 2.0 * inner * params["glyph_fill"]
     segments, bounds = _monogram_box(glyph, box, weight)
     dx = CENTER - (bounds[0] + bounds[2]) / 2.0
     dy = CENTER - (bounds[1] + bounds[3]) / 2.0
-    for x1, y1, x2, y2 in segments:
-        shapes.append(
-            _line(x1 + dx, y1 + dy, x2 + dx, y2 + dy, stroke="ink", width=weight)
-        )
+    centered = [(x1 + dx, y1 + dy, x2 + dx, y2 + dy) for x1, y1, x2, y2 in segments]
     params["monogram"] = {
         "glyph": glyph,
         "box": round(box, 3),
@@ -559,10 +852,18 @@ def _family_monogram(
         "fill_ratio": params["glyph_fill"],
         "center_offset": [round(dx, 3), round(dy, 3)],
         "bbox_center": [CENTER, CENTER],
+        "segments": centered,
     }
+
+    if params["modifier"] == "negative-cut":
+        shapes += _modified_cut("seal-monogram", model, params, rng)
+        return shapes
+
+    for x1, y1, x2, y2 in centered:
+        shapes.append(_line(x1, y1, x2, y2, stroke="ink", width=weight))
     # 인장다운 악센트 — 아래쪽 링 안에 작은 점 하나.
     shapes.append(
-        _circle(unit * 0.75, cx=CENTER, cy=CENTER + inner * 0.86, fill="accent")
+        _circle(unit * 0.75, cx=CENTER, cy=CENTER + inner * 0.82, fill="accent")
     )
     return shapes
 
@@ -570,24 +871,20 @@ def _family_monogram(
 def _family_dandelion(
     model: SourceModel, rng: brand_marks.Rng, params: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
-    """abstract-dandelion — 원본 방사선의 각도·길이에서 씨앗 줄기를 만든다."""
+    """seal-dandelion — 인장 링 안에서 원본 방사 각도·길이를 씨앗으로 추상화한다."""
     unit = params["stroke_unit"]
-    shapes: List[Dict[str, Any]] = []
-    # 씨앗만 남긴다 — 바깥 링을 두르면 바퀴처럼 보인다. 대신 씨앗 머리 안쪽에
-    # 작은 고리 하나만 남겨 인장 리듬과 16px 잉크를 함께 확보한다.
-    params["ring_radii"] = []
-    params["ring_weights"] = []
+    shapes = _frame(model, params, minimum=3)
+    field = _inner_field(params)
 
-    reach = (
-        OUTER_RADIUS
-        * model.ray_length_ratio
-        * params["reach_factor"]
-        * rng.between(1.85, 2.05)
-    )
+    if params["modifier"] == "negative-cut":
+        shapes += _modified_cut("seal-dandelion", model, params, rng)
+        return shapes
+
+    reach = field * 0.72
     halo = reach * 0.45 + params["overshoot_px"]
     shapes.append(_circle(halo, stroke="ink", width=unit))
-    params["ring_radii"] = [round(halo, 3)]
-    params["ring_weights"] = [unit]
+    params["ring_radii"].append(round(halo, 3))
+    params["ring_weights"].append(unit)
     dot = params["seed_dot"]
     bend = rng.between(0.06, 0.11) * reach
     angles = _ray_angles(model, params["seed_count"], params["phase_shift"])
@@ -638,83 +935,33 @@ def _family_dandelion(
     return shapes
 
 
-def _circle_subpath(radius: float) -> str:
-    return (
-        f"M {_n(CENTER - radius)} {_n(CENTER)} "
-        f"A {_n(radius)} {_n(radius)} 0 1,0 {_n(CENTER + radius)} {_n(CENTER)} "
-        f"A {_n(radius)} {_n(radius)} 0 1,0 {_n(CENTER - radius)} {_n(CENTER)} Z"
-    )
-
-
-def _family_negative(
-    model: SourceModel, rng: brand_marks.Rng, params: Dict[str, Any]
-) -> List[Dict[str, Any]]:
-    """negative-cut — 잉크 원판에서 씨앗을 evenodd로 파낸다(진짜 구멍)."""
-    depth = params["cut_depth"]
-    height = OUTER_RADIUS * depth * 2.0
-    width = height * 0.42
-    tip_y = CENTER - height * 0.62
-    bottom_y = CENTER + height * 0.38
-    seed = (
-        f"M {_n(CENTER)} {_n(tip_y)} "
-        f"C {_n(CENTER + width * 0.55)} {_n(CENTER - height * 0.30)} "
-        f"{_n(CENTER + width * 0.55)} {_n(CENTER + height * 0.20)} "
-        f"{_n(CENTER)} {_n(bottom_y)} "
-        f"C {_n(CENTER - width * 0.55)} {_n(CENTER + height * 0.20)} "
-        f"{_n(CENTER - width * 0.55)} {_n(CENTER - height * 0.30)} "
-        f"{_n(CENTER)} {_n(tip_y)} Z"
-    )
-    subpaths = [
-        _circle_subpath(OUTER_RADIUS),
-        _circle_subpath(OUTER_RADIUS * 0.86),
-        _circle_subpath(OUTER_RADIUS * 0.80),
-        seed,
-    ]
-    params["ring_radii"] = [round(OUTER_RADIUS, 3), round(OUTER_RADIUS * 0.86, 3)]
-    params["ring_weights"] = []
-    params["cut"] = {
-        "shape": "seed",
-        "depth": depth,
-        "height": round(height, 3),
-        "width": round(width, 3),
-        "subpaths": len(subpaths),
-    }
-    return [_path(" ".join(subpaths), fill="ink", fill_rule="evenodd")]
-
-
 _FAMILY_BUILDERS = {
     "seal-refined": _family_seal,
-    "monogram-in-seal": _family_monogram,
-    "abstract-dandelion": _family_dandelion,
-    "negative-cut": _family_negative,
+    "seal-monogram": _family_monogram,
+    "seal-dandelion": _family_dandelion,
 }
 
 
 def _note(family: str, params: Mapping[str, Any], model: SourceModel) -> str:
-    """후보 한 줄 한국어 메모 — 가족 + 원본에서 바뀐 점. 마케팅 문구는 쓰지 않는다."""
+    """후보 한 줄 한국어 메모 — 가족·수정자 + 원본에서 바뀐 점. 마케팅 문구는 없다."""
     unit = params["stroke_unit"]
+    cut = params.get("modifier") == "negative-cut"
+    tail = " 중심부는 음각." if cut else ""
     if family == "seal-refined":
         return (
-            f"seal-refined · 고리 {params['ring_count']}겹·방사 {params['seed_count']}줄. "
-            f"유리 돔·각인을 덜고 획 {unit:g} 기준으로 다시 세웠다."
+            f"seal-refined · 고리 {params['ring_count']}겹·방사 "
+            f"{params['seed_count']}줄. 유리 돔·각인을 덜고 획 {unit:g}로 다시 세웠다."
+            f"{tail}"
         )
-    if family == "monogram-in-seal":
+    if family == "seal-monogram":
         mono = params.get("monogram") or {}
         return (
-            f"monogram-in-seal · {mono.get('glyph', '?')}자·획 "
-            f"{mono.get('weight', 0):g}. 링 안쪽에 글자를 앉혀 bbox 중심을 "
-            f"{ARTBOARD // 2}px에 맞췄다."
+            f"seal-monogram · {mono.get('glyph', '?')}자·획 "
+            f"{mono.get('weight', 0):g}. 인장 링 안쪽에 글자를 광학 정렬했다.{tail}"
         )
-    if family == "abstract-dandelion":
-        return (
-            f"abstract-dandelion · 씨앗 {params['seed_count']}개. "
-            f"원본 {round(model.ray_step, 1):g}° 방사 간격을 물려받아 별이 아닌 "
-            f"씨앗으로 그렸다."
-        )
-    cut = params.get("cut") or {}
     return (
-        f"negative-cut · 씨앗 깊이 {cut.get('depth', 0):.2f}R. 잉크 원판에서 "
-        f"evenodd로 파내고 원본 링 비율 {model.ring_ratios[-1]:.2f}를 남겼다."
+        f"seal-dandelion · 씨앗 {params['seed_count']}개. 원본 "
+        f"{round(model.ray_step, 1):g}° 방사 간격을 링 안의 씨앗으로 추상화했다.{tail}"
     )
 
 
@@ -745,8 +992,14 @@ def plan_candidates(
     brief_text = str(brief or "")
     rows: List[Dict[str, Any]] = []
     seen: set = set()
+    occurrences: Dict[str, int] = {}
     for index in range(total):
         family = chosen[index % len(chosen)]
+        # 음각은 가족 안에서 두 번째 변주부터 켠다 — 8개면 가족마다 최소 1개,
+        # 12개면 가족마다 2개가 음각이 된다. 가족 정체성은 바뀌지 않는다.
+        occurrence = occurrences.get(family, 0)
+        occurrences[family] = occurrence + 1
+        modifier = "negative-cut" if occurrence % 2 == 1 else "none"
         seed = brand_marks.seed_for(brief_text, index, seed_hint=seed_hint)
         rng = brand_marks.Rng(seed)
         unit = rng.pick((8.0, 10.0, 12.0))
@@ -768,11 +1021,13 @@ def plan_candidates(
             "glyph": _glyph_for(name, name),
             "glyph_fill": round(rng.between(0.52, 0.62), 3),
             "glyph_weight": round(unit * 2.0, 1),
+            "modifier": modifier,
         }
         shapes = _FAMILY_BUILDERS[family](model, rng, params)
         params["shapes"] = shapes
         token = f"{seed & 0xFFFFFFFFFFFF:012x}"
-        candidate_id = f"refine-{family}-{token}"
+        suffix = "-cut" if modifier == "negative-cut" else ""
+        candidate_id = f"refine-{family}{suffix}-{token}"
         if candidate_id in seen:
             candidate_id = f"{candidate_id}-{index}"
         seen.add(candidate_id)
