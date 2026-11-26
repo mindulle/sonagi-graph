@@ -225,4 +225,66 @@ CMYK·PDF/X·도련은 당선된 뒤 인쇄소에 넘길 때만 의미가 있다
   `paper`(light)·`ink`(dark)다.
 - 목업은 web의 카드 헬퍼를 재사용하고(없으면 같은 규격으로 직접), 아이콘 타일을 더한다.
 
+#### 8.4.1 explore 모드 (GRAPH-33)
+
+`spec.brand.mode = "existing" | "explore"`. 기본값은 `existing`이라 지금까지의 동작
+(사용자 SVG → 정규화·아웃라인·게이트·팩)이 **바이트 단위로 그대로** 유지된다.
+`explore`는 우리가 클라이언트일 때 브리프에서 **새 마크 방향**을 만든다.
+
+```jsonc
+{
+  "profile": "brand",
+  "brand": {
+    "mode": "explore",
+    "brief": "민들레 — 차분하고 고급스러운 스튜디오. 여백과 인쇄물.",
+    "name": "mindulle",              // 선택(없으면 brief로 슬러그)
+    "candidates": 6,                 // 기본 6, 2~12
+    "palette": {"ink": "#161616", "paper": "#fbf9f5",
+                "accent": "#b4551f", "calm": "#1f4536"},
+    "mark_path": null                // 선택: 참고 SVG. 없어도 된다
+  }
+}
+```
+
+- `brief`는 `spec.brand.brief` 또는 `spec.brand.concept`(또는 top-level `spec.brief`)에서
+  온다. `entry_pack`은 `spec_node`의 profile `enrich_spec` 훅으로 state의 `brief`를 넣는다.
+- 후보 생성은 **시드 결정론**이다. `sha256(brief·concept·seed_hint)` + 후보 인덱스로
+  64비트 시드를 만들고 splitmix64로 파라미터를 뽑는다. 같은 입력이면 좌표·SVG·PNG가
+  같다. LLM·난수 모듈은 쓰지 않는다.
+
+| 가족 | 형태 | 파라미터(시드에서 뽑음) |
+| --- | --- | --- |
+| `monogram` | 두꺼운 기하 획 이니셜(H·N·A·K·X·M·T·S·D) | 글리프·획 굵기·악센트 획·거울 |
+| `seal` | 링/라운드 사각 프레임 + 내부 폴리곤·별·다이아·V | 프레임·내부형·면 수·회전·점 |
+| `radial` | 꽃잎·광선·동심 링의 N회전 대칭 | 모드·개수·궤도·회전 |
+
+후보 하나의 처리 순서:
+
+| 단계 | 내용 |
+| --- | --- |
+| 생성 | `vectorcraft-cli run --cmd file.new/shape.*/path.create/paint.* --export 후보.svg --export 후보.png` |
+| 정규화 | 기존 `normalize()` (순수 파이썬) |
+| 아웃라인 | 기존 `vectorcraft-cli convert --outline-text` |
+| 단색 변형 | 모든 `fill`/`stroke`를 팔레트 `ink` 하나로 치환한 `outlined-single-color.svg` |
+
+후보 게이트(실패해도 후보를 버리지 않고 사유를 남긴다):
+
+| 게이트 | 검사 |
+| --- | --- |
+| `brand.no_text` · `brand.no_style` · `brand.raster` | 기존 brand 게이트 재사용 |
+| `candidate.palette` | SVG의 모든 fill/stroke 색이 넘겨받은 팔레트 안 |
+| `candidate.safe_area` | 256px 렌더 바운딩박스의 사방 여백 ≥ 4% (아트보드 밖/가장자리 금지) |
+| `candidate.single_color` | 단색 변형의 색이 정확히 1개이고 64px 렌더에 픽셀이 있다 |
+| `candidate.legible_16` | 16px 단색 렌더의 잉크 5~90%, bbox ≥ 6×6px |
+
+- **최소 2개 통과** 규칙: `BrandProfile.check_candidates`가 HITL 직전에 검사하고,
+  미달이면 `CandidateGateError`로 멈춘다(후보별 실패 사유 포함). 실패한 후보를
+  골라 pack하면 `BrandGateError`로 막힌다.
+- HITL 선택지는 후보마다 하나씩 `id`·`family`·`seed`·`gate_summary`·`gates`를 싣는다
+  (`entry_pack.gate_node`가 render 메타를 option으로 옮긴다).
+- 선택 후 팩은 기존 파이프라인 그대로 `normalized.svg`·`outlined.svg`·`mark.pdf`·
+  PNG 2000·JPG 90·아이콘 16~512 × light/dark를 만들고, explore에서만
+  **락업**(`lockup.svg`·`lockup.pdf`, 워드마크 아웃라인)을 더한다. meta에는
+  `mode`·`brief_sha256`·`candidate`·`candidate_gates`가 남는다.
+
 

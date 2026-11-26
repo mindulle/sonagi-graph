@@ -12,6 +12,7 @@ Discord 세션에서 그래프를 실행하려면 `scripts/graph_cli.py`를 쓴�
 | `error_triage` | Sentry 에러 분석 | `{"messages":[{"role":"user","content":"에러 로그"}]}` |
 | `entry_pack` | 엔트리 변주·포장 (profile `web`/`print`/`brand`) | `{"brief":"...","spec":{"platform":"99designs"}}` |
 | `entry_pack` (brand) | 마크 납품 — 정규화·아웃라인·게이트·팩 | `{"brief":"브랜드","spec":{"profile":"brand","brand":{"mark_path":"/path/mark.svg"}}}` |
+| `entry_pack` (brand explore) | 브리프 → 시드 결정론 후보 6개 → 게이트 → HITL → 킷(락업 포함) | `{"brief":"브랜드","spec":{"profile":"brand","brand":{"mode":"explore","brief":"민들레 — 차분한 스튜디오","candidates":6}}}` |
 | `copywriting_craft` | 카피 3안 생성 | `{"scene_id":"Act 1","raw_draft":"초안","context":"맥락"}` |
 | `editorial_verification` | 글 4대 검증 | `{"title":"제목","content":"본문"}` |
 | `visual_consistency` | 시각 일관성 검증 | `{"project_name":"프로젝트","vectors":[...],"motions":[...],"imagery":[...]}` |
