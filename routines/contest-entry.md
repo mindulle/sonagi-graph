@@ -85,6 +85,10 @@ description: >
 ```
 
 - `spec.brand.mark_path`가 필수다. SVG만 받는다.
+- 배포 컨테이너는 `/home/ubuntu/briefs`와 디자인 시스템 `packages/brand-assets`를
+  읽기 전용으로 마운트한다. 브리프·마크는 호스트의 이 경로에 두어야 그래프가
+  파일을 찾는다. 그 밖의 경로를 주면 `mark_path 파일이 없다`로 즉시 실패한다
+  (의도된 동작: 조용히 대체하지 않는다).
 - `palette` 키는 `ink`·`paper`·`accent`·`calm`만 쓴다.
 - 아이콘 크기·배경은 기본값이 있으므로 비워도 된다.
 
