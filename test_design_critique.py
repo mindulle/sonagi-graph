@@ -44,12 +44,15 @@ def _extract_axis_id(prompt_value) -> str:
 
 def _is_swapped_call(prompt_value) -> bool:
     text = prompt_value.to_string() if hasattr(prompt_value, "to_string") else str(prompt_value)
-    marker = "[A] 후보:\n"
-    idx = text.find(marker)
-    if idx == -1:
+    marker_a = "[A] 후보:\n"
+    marker_b = "\n\n[B] 후보:"
+    idx_a = text.find(marker_a)
+    if idx_a == -1:
         return False
-    after_a = text[idx + len(marker) : idx + len(marker) + 120]
-    return '"id": "B"' in after_a or '"name": "B"' in after_a
+    start = idx_a + len(marker_a)
+    idx_b = text.find(marker_b, start)
+    section_a = text[start:idx_b] if idx_b != -1 else text[start:]
+    return '"id": "B"' in section_a or '"name": "B"' in section_a
 
 
 class _StubCritiqueLLM:
