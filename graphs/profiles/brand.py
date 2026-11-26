@@ -1,10 +1,16 @@
-"""brand profile — 브랜드/아이덴티티 엔트리 (GRAPH-18, P4b).
+"""brand profile — 브랜드/아이덴티티 엔트리 (GRAPH-18, P4b · GRAPH-33 explore).
 
-마크(로고·락업)는 **사용자가 만든 SVG**다. 그래프는 마크를 새로 그리지 않고,
-납품 가능한 상태로 정규화·아웃라인·게이트·포장한다. 이 순서가 전부다.
+두 모드가 있다.
+
+- `mode="existing"`(기본): 마크는 **사용자가 만든 SVG**다. 그래프는 마크를 새로
+  그리지 않고, 납품 가능한 상태로 정규화·아웃라인·게이트·포장한다.
+- `mode="explore"`: 브리프에서 **새 마크 방향**을 만든다. `graphs/brand_marks.py`가
+  시드 결정론으로 monogram·seal·radial 후보를 VectorCraft headless로 그리고,
+  후보마다 같은 게이트를 건 뒤 최소 2개 통과를 요구한다. 선택된 하나는 기존
+  파이프라인으로 아이콘·락업·PDF 킷이 된다.
 
 ```
-mark.svg
+mark.svg (existing)
   │
   ▼
 normalize   <style>/var()/class → 프레젠테이션 속성 (순수 파이썬, 결정론)
@@ -22,6 +28,9 @@ pack        normalized.svg · outlined.svg · mark.pdf · PNG 2000 · JPG 90
   ▼
 mockups     카드(web helper 재사용) · 아이콘 타일 (Pillow, 결정론)
 ```
+
+explore는 앞단만 다르다: `brief → 후보 계획 → VectorCraft → 위 normalize/outline`.
+후보 게이트는 기존 3종에 `palette`·`safe_area`·`single_color`·`legible_16`을 더한다.
 
 spec 예::
 
@@ -63,6 +72,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from graphs import brand_marks
 from graphs.core import artifacts as core_artifacts
 from graphs.core import env as core_env
 from graphs.profiles import base
@@ -71,18 +81,16 @@ DEFAULT_SIZES: Tuple[int, ...] = (16, 32, 64, 256, 512)
 DEFAULT_BACKGROUNDS: Tuple[str, ...] = ("light", "dark")
 BACKGROUNDS = ("light", "dark")
 
+#: 브랜드 모드. `existing`은 지금까지의 동작(사용자 SVG), `explore`는 후보 생성이다.
+MODES: Tuple[str, ...] = ("existing", "explore")
+
 #: context_test가 렌더하는 크기 — 16px 파비콘부터 앱 아이콘까지.
 CONTEXT_SIZES: Tuple[int, ...] = (16, 32, 64, 256)
 
 #: 렌더가 실패했을 때의 감점(삭제된 logo_design 그래프와 같은 값).
 CRAFT_FAILURE_PENALTY = 20
 
-DEFAULT_PALETTE: Dict[str, str] = {
-    "ink": "#161616",
-    "paper": "#fbf9f5",
-    "accent": "#b4551f",
-    "calm": "#1f4536",
-}
+DEFAULT_PALETTE: Dict[str, str] = dict(brand_marks.DEFAULT_PALETTE)
 
 #: 클래스 규칙 → 프레젠테이션 속성으로 펼치는 목록. 앞의 7개가 계약이고,
 #: 나머지는 마크에서 흔한 짝(paint-order·투명도 등)이라 함께 옮긴다.
@@ -111,6 +119,7 @@ DEFAULT_SPEC: Dict[str, Any] = {
     "jpg_quality": 90,
     "allow_brand_checks": False,
     # 마크는 사용자가 준다 — 방향/레퍼런스가 산출물에 쓰이지 않는다.
+    # explore 모드도 후보 생성이 결정론이라 지식·LLM이 필요 없다.
     "skip_knowledge": True,
     "skip_llm": True,
 }
@@ -122,6 +131,28 @@ GATES: Tuple[base.Gate, ...] = (
         "brand.raster", "256px 래스터에 불투명 픽셀이 1개 이상 있다(빈 렌더 E015)"
     ),
     base.Gate("brand.pdf", "출력 PDF가 존재하고 0바이트보다 크다"),
+)
+
+#: explore 후보 하나에 추가로 거는 검사. 앞 3개는 기존 게이트를 그대로 재사용한다.
+CANDIDATE_GATES: Tuple[base.Gate, ...] = (
+    base.Gate("candidate.palette", "색이 모두 넘겨받은 팔레트 안에 있다"),
+    base.Gate("candidate.safe_area", "256px 렌더의 사방 여백이 4% 이상이다"),
+    base.Gate("candidate.single_color", "단색 변형이 색 1개로 렌더된다"),
+    base.Gate("candidate.legible_16", "16px 단색 래스터에 형태가 남는다"),
+    base.Gate("brand.lockup", "락업 SVG·PDF가 있고 SVG에 텍스트가 없다"),
+)
+
+#: 후보 렌더가 반드시 들고 있어야 하는 게이트 id. 부분 상태를 통과로 오인하지 않는다.
+REQUIRED_CANDIDATE_GATE_IDS = frozenset(
+    {
+        "brand.no_text",
+        "brand.no_style",
+        "brand.raster",
+        "candidate.palette",
+        "candidate.safe_area",
+        "candidate.single_color",
+        "candidate.legible_16",
+    }
 )
 
 #: 정규화가 인식하는 태그·속성 패턴. 속성값 안의 `>`는 인용부 안에서만 허용한다.
@@ -157,6 +188,33 @@ class BrandGateError(RuntimeError):
         for item in self.failures:
             lines.append(f"- {item.get('id')}: {item.get('detail')}")
         lines.append("테스트에서만 spec['allow_brand_checks']=true로 건너뛸 수 있다.")
+        super().__init__("\n".join(lines))
+
+
+class CandidateGateError(RuntimeError):
+    """explore 후보가 최소 통과 수를 못 채웠다. 후보별 사유를 전부 들고 있다."""
+
+    def __init__(
+        self,
+        passing: int,
+        total: int,
+        failures: Sequence[Mapping[str, Any]],
+        *,
+        minimum: int = brand_marks.MIN_PASSING,
+    ):
+        self.passing = int(passing)
+        self.total = int(total)
+        self.failures = [dict(item) for item in failures]
+        lines = [
+            f"brand explore: 게이트를 통과한 후보가 {passing}개다 — "
+            f"최소 {minimum}개가 필요하다(후보 {total}개).",
+            "브리프를 더 단순한 형태로 바꾸거나 candidates를 늘린 뒤 다시 실행하라.",
+        ]
+        for item in self.failures:
+            lines.append(
+                f"- {item.get('candidate')}: "
+                + ", ".join(item.get("reasons") or [item.get("detail", "")])
+            )
         super().__init__("\n".join(lines))
 
 
@@ -453,27 +511,103 @@ def _backgrounds(value: Any) -> List[str]:
     return rows
 
 
+def _mode(brand: Mapping[str, Any]) -> str:
+    mode = str(brand.get("mode") or "existing").strip().lower()
+    if mode not in MODES:
+        raise base.ProfileError(
+            f"brand profile: mode는 {'|'.join(MODES)} 중 하나다 — {brand.get('mode')!r}"
+        )
+    return mode
+
+
+def _brief_text(brand: Mapping[str, Any], spec: Mapping[str, Any]) -> Tuple[str, str]:
+    """explore 브리프와 개념 텍스트. 브리프가 없으면 concept을 브리프로 쓴다."""
+    concept = brand.get("concept")
+    if isinstance(concept, Mapping):
+        concept_text = " ".join(
+            str(concept.get(key))
+            for key in ("title", "description", "visual_language")
+            if concept.get(key)
+        ).strip()
+    else:
+        concept_text = str(concept or "").strip()
+    brief = str(brand.get("brief") or spec.get("brief") or concept_text).strip()
+    return brief, concept_text
+
+
+def _candidate_count(value: Any) -> int:
+    if isinstance(value, bool):
+        raise base.ProfileError(
+            f"brand profile: candidates는 2~{brand_marks.MAX_CANDIDATES} 정수여야 한다 — {value!r}"
+        )
+    try:
+        if isinstance(value, float) and not value.is_integer():
+            raise ValueError
+        count = int(value)
+        if isinstance(value, str) and value.strip() != str(count):
+            raise ValueError
+    except (TypeError, ValueError):
+        raise base.ProfileError(
+            f"brand profile: candidates는 2~{brand_marks.MAX_CANDIDATES} 정수여야 한다 — {value!r}"
+        ) from None
+    if count < brand_marks.MIN_PASSING or count > brand_marks.MAX_CANDIDATES:
+        raise base.ProfileError(
+            f"brand profile: candidates는 2~{brand_marks.MAX_CANDIDATES}개여야 한다 — "
+            f"{count}(게이트 통과 최소 {brand_marks.MIN_PASSING}개)"
+        )
+    return count
+
+
+def _display_name(brand: Mapping[str, Any], brief: str) -> str:
+    """락업에 쓸 표시 이름. 없으면 브리프의 첫 구절을 쓰고 길이를 제한한다."""
+    raw = str(brand.get("name") or "").strip()
+    if not raw:
+        raw = re.split(r"[—–·:|,.;]", str(brief))[0].strip() or str(brief).strip()
+    return raw[:40].strip()
+
+
 def brand_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
-    """`spec['brand']`를 검증·정규화한다. 누락은 실행 전에 멈춘다."""
+    """`spec['brand']`를 검증·정규화한다. 누락은 실행 전에 멈춘다.
+
+    `mode="existing"`(기본)은 지금까지처럼 `mark_path`가 필수다.
+    `mode="explore"`는 브리프(`brief` 또는 `concept`)에서 후보를 만들므로
+    `mark_path`가 선택이고 `candidates`(기본 6, 최대 12)를 받는다.
+    """
     brand = spec.get("brand")
     if not isinstance(brand, Mapping):
         raise base.ProfileError(
             "brand profile: spec['brand']가 필요하다 — "
             "mark_path(SVG)·palette·variants·name을 담은 사전을 넣어라"
         )
+    mode = _mode(brand)
+
     raw_mark = brand.get("mark_path")
-    if not raw_mark:
-        raise base.ProfileError(
-            "brand profile: spec['brand']['mark_path']가 필요하다 — "
-            "VectorCraft/DesignCraft에서 내보낸 SVG 경로를 넣어라"
-        )
-    mark = Path(str(raw_mark))
-    if not mark.is_file():
-        raise base.ProfileError(f"brand profile: mark_path 파일이 없다 — {mark}")
-    if mark.suffix.lower() != ".svg":
-        raise base.ProfileError(
-            f"brand profile: mark_path는 SVG여야 한다 — {mark.suffix or '확장자 없음'}: {mark}"
-        )
+    mark: Optional[Path] = None
+    if mode == "existing":
+        if not raw_mark:
+            raise base.ProfileError(
+                "brand profile: spec['brand']['mark_path']가 필요하다 — "
+                "VectorCraft/DesignCraft에서 내보낸 SVG 경로를 넣어라. "
+                "새 마크 방향을 만들려면 spec['brand']['mode']='explore'와 brief를 넣어라"
+            )
+        mark = Path(str(raw_mark))
+        if not mark.is_file():
+            raise base.ProfileError(f"brand profile: mark_path 파일이 없다 — {mark}")
+        if mark.suffix.lower() != ".svg":
+            raise base.ProfileError(
+                f"brand profile: mark_path는 SVG여야 한다 — "
+                f"{mark.suffix or '확장자 없음'}: {mark}"
+            )
+    elif raw_mark:
+        # explore에서도 참고 마크를 줄 수 있다. 있으면 형식만 검사한다.
+        mark = Path(str(raw_mark))
+        if not mark.is_file():
+            raise base.ProfileError(f"brand profile: mark_path 파일이 없다 — {mark}")
+        if mark.suffix.lower() != ".svg":
+            raise base.ProfileError(
+                f"brand profile: mark_path는 SVG여야 한다 — "
+                f"{mark.suffix or '확장자 없음'}: {mark}"
+            )
 
     palette_in = brand.get("palette") or {}
     if not isinstance(palette_in, Mapping):
@@ -506,14 +640,48 @@ def brand_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
             "brand profile: variants는 {sizes, backgrounds} 사전이거나 사이즈 목록이다"
         )
 
-    name = _slug(brand.get("name") or mark.stem)
     pdf = brand.get("pdf", spec.get("pdf", True)) is not False
+    sizes = _sizes(raw_sizes)
+    backgrounds = _backgrounds(raw_backgrounds)
+
+    if mode == "explore":
+        brief, concept_text = _brief_text(brand, spec)
+        if not brief:
+            raise base.ProfileError(
+                "brand profile: explore 모드는 brief가 필요하다 — "
+                "spec['brand']['brief'] 또는 spec['brand']['concept'](또는 spec['brief'])에 "
+                "브랜드 방향을 한 문장 이상 적어라"
+            )
+        count = _candidate_count(
+            brand.get("candidates", brand_marks.DEFAULT_CANDIDATES)
+        )
+        display = _display_name(brand, brief)
+        seed_hint = str(brand.get("seed") or spec.get("seed") or "").strip()
+        return {
+            "mode": "explore",
+            "name": _slug(display)[:48],
+            "display_name": display,
+            "brief": brief,
+            "brief_sha256": brand_marks.brief_digest(brief, concept_text, seed_hint),
+            "concept": concept_text,
+            "candidates": count,
+            "seed": seed_hint,
+            "mark_path": str(mark) if mark is not None else None,
+            "palette": palette,
+            "sizes": sizes,
+            "backgrounds": backgrounds,
+            "pdf": pdf,
+        }
+
+    assert mark is not None  # existing 모드는 위에서 보장한다
+    name = _slug(brand.get("name") or mark.stem)
     return {
+        "mode": "existing",
         "name": name,
         "mark_path": str(mark),
         "palette": palette,
-        "sizes": _sizes(raw_sizes),
-        "backgrounds": _backgrounds(raw_backgrounds),
+        "sizes": sizes,
+        "backgrounds": backgrounds,
         "pdf": pdf,
         "sha256": core_artifacts.sha256_file(mark),
     }
@@ -725,6 +893,237 @@ def run_gates(
     elif failures:
         raise BrandGateError(failures)
     return results
+
+
+# ---------------------------------------------------------------------------
+# explore 후보 게이트 — 기존 게이트 + 팔레트·여백·단색·16px
+# ---------------------------------------------------------------------------
+
+
+def _gate_palette(svg: Path, palette: Mapping[str, str]) -> Dict[str, Any]:
+    text = Path(svg).read_text(encoding="utf-8", errors="replace")
+    colors = brand_marks.svg_colors(text)
+    if not colors:
+        return _fail(
+            "candidate.palette",
+            f"fill/stroke 색이 하나도 없다 — 도형에 팔레트 색을 지정하라: {Path(svg).name}",
+        )
+    allowed = {brand_marks.hex6(str(value)) for value in palette.values()}
+    outside = sorted(set(colors) - allowed)
+    if outside:
+        return _fail(
+            "candidate.palette",
+            f"팔레트 밖 색 {len(outside)}개 — {', '.join(outside)}. "
+            f"허용: {', '.join(sorted(allowed))}",
+        )
+    return _ok("candidate.palette", f"색 {len(colors)}개 모두 팔레트 안")
+
+
+def _gate_safe_area(png: Path) -> Dict[str, Any]:
+    if not Path(png).is_file():
+        return _fail(
+            "candidate.safe_area",
+            f"256px 래스터가 없어 여백을 잴 수 없다 — raster 게이트를 먼저 확인하라: {png}",
+        )
+    try:
+        stats = brand_marks.image_stats(png)
+        margins = brand_marks.bbox_margins(stats)
+    except Exception as exc:  # noqa: BLE001
+        return _fail("candidate.safe_area", f"래스터를 읽을 수 없다 — {_tail(exc)}")
+    if stats["opaque"] <= 0:
+        return _fail(
+            "candidate.safe_area",
+            "불투명 픽셀이 없어 여백을 잴 수 없다(빈 렌더)",
+        )
+    minimum = 0.04
+    tight = sorted(
+        f"{name} {value:.1%}" for name, value in margins.items() if value < minimum
+    )
+    if tight:
+        return _fail(
+            "candidate.safe_area",
+            f"사방 여백 4% 미만 — {', '.join(tight)}. 마크가 아트보드 가장자리에 닿았다",
+        )
+    return _ok(
+        "candidate.safe_area",
+        "사방 여백 "
+        + " · ".join(f"{name} {value:.1%}" for name, value in margins.items()),
+    )
+
+
+def _render_probe(
+    ctx: base.ProfileContext,
+    svg: Path,
+    out: Path,
+    box: int,
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """단색 SVG를 `box`px로 래스터화하고 픽셀 통계를 돌려준다."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if out.is_file():
+        out.unlink()
+    try:
+        ctx.run(
+            [
+                _binary(ctx),
+                "convert",
+                str(svg),
+                str(out),
+                "--scale",
+                f"{_fit_scale(svg, box):.6f}",
+            ],
+            timeout=60,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return None, f"래스터화 실패 — {_tail(exc)}"
+    if not out.is_file():
+        return None, f"래스터 결과가 없다 — {out}"
+    try:
+        return brand_marks.image_stats(out), None
+    except Exception as exc:  # noqa: BLE001
+        return None, f"래스터를 읽을 수 없다 — {_tail(exc)}"
+
+
+def _gate_single_color(
+    ctx: base.ProfileContext, svg: Path, workdir: Path
+) -> Dict[str, Any]:
+    if not Path(svg).is_file():
+        return _fail("candidate.single_color", f"단색 SVG가 없다 — {svg}")
+    text = Path(svg).read_text(encoding="utf-8", errors="replace")
+    colors = brand_marks.svg_colors(text)
+    if len(colors) != 1:
+        return _fail(
+            "candidate.single_color",
+            f"단색이 아니다 — 색 {len(colors)}개({', '.join(colors) or '없음'})",
+        )
+    stats, error = _render_probe(
+        ctx, Path(svg), Path(workdir) / "gate-64-single.png", 64
+    )
+    if error:
+        return _fail("candidate.single_color", error)
+    if not stats or stats["opaque"] <= 0:
+        return _fail("candidate.single_color", "단색 렌더에 불투명 픽셀이 0개다")
+    return _ok(
+        "candidate.single_color",
+        f"색 1개({colors[0]}) · 64px 불투명 {stats['ratio']:.1%}",
+    )
+
+
+def _gate_legible_16(
+    ctx: base.ProfileContext, svg: Path, workdir: Path
+) -> Dict[str, Any]:
+    stats, error = _render_probe(ctx, Path(svg), Path(workdir) / "gate-16.png", 16)
+    if error:
+        return _fail("candidate.legible_16", error)
+    if not stats or stats["opaque"] <= 0:
+        return _fail(
+            "candidate.legible_16",
+            "16px 렌더에 불투명 픽셀이 0개다 — 16px에서 형태가 사라진다",
+        )
+    bbox = stats.get("bbox")
+    width = (bbox[2] - bbox[0]) if bbox else 0
+    height = (bbox[3] - bbox[1]) if bbox else 0
+    ratio = float(stats["ratio"])
+    if ratio < 0.05:
+        return _fail(
+            "candidate.legible_16",
+            f"16px에서 잉크가 {ratio:.1%}뿐이다(< 5%) — 획이 너무 얇다",
+        )
+    if ratio > 0.90:
+        return _fail(
+            "candidate.legible_16",
+            f"16px에서 잉크가 {ratio:.1%}다(> 90%) — 형태가 뭉개진다",
+        )
+    if width < 6 or height < 6:
+        return _fail(
+            "candidate.legible_16",
+            f"16px 바운딩박스가 {width}×{height}px다 — 형태가 너무 작다(< 6px)",
+        )
+    return _ok(
+        "candidate.legible_16",
+        f"16px 불투명 {ratio:.1%} · bbox {width}×{height}px",
+    )
+
+
+def candidate_gates(
+    ctx: base.ProfileContext,
+    *,
+    outlined: Path,
+    single_color: Path,
+    workdir: Path,
+    palette: Mapping[str, str],
+) -> List[Dict[str, Any]]:
+    """explore 후보 하나의 게이트. 실패해도 멈추지 않고 결과 전부를 돌려준다."""
+    results = [
+        _gate_no_text(outlined),
+        _gate_no_style(outlined),
+        _gate_raster(ctx, outlined, workdir),
+        _gate_palette(outlined, palette),
+        _gate_safe_area(Path(workdir) / "gate-256.png"),
+        _gate_single_color(ctx, single_color, workdir),
+        _gate_legible_16(ctx, single_color, workdir),
+    ]
+    return results
+
+
+def candidate_gate_summary(gates: Sequence[Mapping[str, Any]]) -> str:
+    rows = list(gates or [])
+    passed = sum(1 for gate in rows if gate.get("ok"))
+    failed = [str(gate.get("id")) for gate in rows if not gate.get("ok")]
+    text = f"{passed}/{len(rows)} 통과"
+    if failed:
+        text += " — 실패: " + ", ".join(failed)
+    return text
+
+
+def _gate_lockup(
+    svg: Path, pdf: Optional[Path], *, pdf_required: bool = True
+) -> Dict[str, Any]:
+    if not Path(svg).is_file():
+        return _fail("brand.lockup", f"락업 SVG가 없다 — {svg}")
+    text = Path(svg).read_text(encoding="utf-8", errors="replace")
+    count = len(_TEXT_OPEN.findall(_without_comments(text)))
+    if count:
+        return _fail(
+            "brand.lockup",
+            f"락업 SVG에 <text>가 {count}개 남아 있다 — 아웃라인 단계를 확인하라",
+        )
+    if pdf_required:
+        if pdf is None or not Path(pdf).is_file():
+            return _fail("brand.lockup", f"락업 PDF가 없다 — {pdf}")
+        if Path(pdf).stat().st_size <= 0:
+            return _fail("brand.lockup", f"락업 PDF가 0바이트다 — {pdf}")
+    return _ok(
+        "brand.lockup",
+        f"{Path(svg).name} · PDF {'있음' if pdf and Path(pdf).is_file() else '생략'}",
+    )
+
+
+def check_candidates(
+    renders: Sequence[Mapping[str, Any]],
+    *,
+    minimum: int = brand_marks.MIN_PASSING,
+) -> Dict[str, Any]:
+    """후보 렌더를 검사해 통과 수·실패 사유를 돌려준다. 최소 미달이면 예외."""
+    total = len(renders)
+    passing = 0
+    failures: List[Dict[str, Any]] = []
+    for render in renders:
+        gates = list(render.get("gates") or [])
+        present = {str(gate.get("id")) for gate in gates}
+        missing = sorted(REQUIRED_CANDIDATE_GATE_IDS - present)
+        failed = [gate for gate in gates if not gate.get("ok")]
+        if gates and not failed and not missing:
+            passing += 1
+            continue
+        reasons = [f"{gate.get('id')}: {gate.get('detail')}" for gate in failed]
+        if missing:
+            reasons.append("게이트 누락: " + ", ".join(missing))
+        if not reasons:
+            reasons = ["게이트 결과가 없다 — 렌더가 끝나지 않았다"]
+        failures.append({"candidate": render.get("id"), "reasons": reasons})
+    if passing < minimum:
+        raise CandidateGateError(passing, total, failures, minimum=minimum)
+    return {"passing": passing, "total": total, "failures": failures}
 
 
 # ---------------------------------------------------------------------------
@@ -1347,6 +1746,35 @@ class BrandProfile:
         """spec_node에서 knowledge·LLM 전에 brand 계약을 확인한다."""
         brand_spec(spec)
 
+    def enrich_spec(self, spec: Mapping[str, Any], brief: str = "") -> Dict[str, Any]:
+        """그래프 state의 brief를 explore spec에 주입한다(다른 profile엔 없는 훅).
+
+        `spec['brand']['brief']`가 이미 있으면 건드리지 않는다. 이 훅이 없으면
+        `entry_pack`의 top-level `brief`가 profile까지 닿지 않는다.
+        """
+        raw_brand = spec.get("brand")
+        if not isinstance(raw_brand, Mapping):
+            return dict(spec)  # validate()가 친절한 ProfileError를 낸다
+        brand = dict(raw_brand)
+        if str(brand.get("mode") or "").strip().lower() != "explore":
+            return dict(spec)  # existing 모드의 spec 지문을 바꾸지 않는다
+        if not brand.get("brief") and not spec.get("brief"):
+            brand["brief"] = str(brief or "")
+        updated = {**dict(spec), "brand": brand}
+        # explore 후보는 전부 HITL 선택지로 올린다(최대 12개). existing 기본값은
+        # 건드리지 않는다 — 기존 manifest의 spec 지문이 바뀌면 안 된다.
+        updated.setdefault("top_n", brand_marks.MAX_CANDIDATES)
+        return updated
+
+    def check_candidates(
+        self, renders: Sequence[Mapping[str, Any]], spec: Mapping[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """explore 모드에서 최소 2개 통과를 강제한다(existing은 무시)."""
+        brand = brand_spec(spec)
+        if brand["mode"] != "explore":
+            return None
+        return check_candidates(renders)
+
     def plan(
         self,
         ir: Mapping[str, Any],
@@ -1354,6 +1782,27 @@ class BrandProfile:
         styles: Sequence[Mapping[str, Any]],
     ) -> List[Dict[str, Any]]:
         brand = brand_spec(spec)
+        if brand["mode"] == "explore":
+            candidates = brand_marks.plan_candidates(
+                brand["brief"],
+                concept=brand["concept"],
+                count=brand["candidates"],
+                seed_hint=brand["seed"],
+            )
+            return [
+                {
+                    "id": candidate["id"],
+                    "kind": "brand",
+                    "direction": candidate["family"],
+                    "style": candidate["family"],
+                    "theme": "brand",
+                    "brand": brand,
+                    "candidate": candidate,
+                    "family": candidate["family"],
+                    "seed": candidate["seed"],
+                }
+                for candidate in candidates
+            ]
         return [
             {
                 "id": f"brand-{brand['name']}",
@@ -1371,6 +1820,9 @@ class BrandProfile:
         brand = dict(variant["brand"])
         out = Path(ctx.run_dir or ctx.out_root) / variant["id"]
         out.mkdir(parents=True, exist_ok=True)
+
+        if brand.get("mode", "existing") == "explore":
+            return self._render_explore(variant, brand, out, ctx)
 
         raw = Path(brand["mark_path"]).read_text(encoding="utf-8")
         normalized_text = normalize(raw)
@@ -1395,6 +1847,65 @@ class BrandProfile:
             "stats": stats,
         }
 
+    def _render_explore(
+        self,
+        variant: Mapping[str, Any],
+        brand: Mapping[str, Any],
+        out: Path,
+        ctx: base.ProfileContext,
+    ) -> Dict[str, Any]:
+        """후보 하나를 VectorCraft headless로 그린 뒤 기존 정규화·아웃라인을 건다."""
+        candidate = dict(variant.get("candidate") or {})
+        rendered = brand_marks.render_candidate(
+            ctx.run,
+            _binary(ctx),
+            candidate,
+            out,
+            brand["palette"],
+        )
+        raw = Path(rendered["svg"]).read_text(encoding="utf-8")
+        normalized_text = normalize(raw)
+        normalized = out / "normalized.svg"
+        normalized.write_text(normalized_text, encoding="utf-8")
+
+        outlined = outline(
+            normalized,
+            out / "outlined.svg",
+            run=ctx.run,
+            vectorcraft=_binary(ctx),
+        )
+        outlined_text = outlined.read_text(encoding="utf-8", errors="replace")
+
+        single_text = brand_marks.single_color_svg(
+            outlined_text, brand["palette"]["ink"]
+        )
+        single_color = out / "outlined-single-color.svg"
+        single_color.write_text(single_text, encoding="utf-8")
+
+        gates = candidate_gates(
+            ctx,
+            outlined=outlined,
+            single_color=single_color,
+            workdir=out / "gate",
+            palette=brand["palette"],
+        )
+        stats = normalize_report(raw, normalized_text)
+        stats["outlined"] = svg_stats(outlined_text)
+        return {
+            **variant,
+            "svg": str(outlined),
+            "png": rendered["png"],
+            "candidate_svg": rendered["svg"],
+            "normalized": str(normalized),
+            "outlined": str(outlined),
+            "single_color": str(single_color),
+            "stats": stats,
+            "gates": gates,
+            "gate_summary": candidate_gate_summary(gates),
+            "family": candidate.get("family"),
+            "seed": candidate.get("seed"),
+        }
+
     def gates(self) -> List[base.Gate]:
         return list(GATES)
 
@@ -1415,6 +1926,12 @@ class BrandProfile:
             raise base.ProfileError(
                 f"brand profile: selection {len(selection)}건 중 {len(items)}건만 렌더가 있다 — "
                 "렌더를 다시 만든 뒤 pack을 실행하라"
+            )
+        explore = brand.get("mode", "existing") == "explore"
+        if explore and len(items) > 1:
+            raise base.ProfileError(
+                f"brand explore: 킷은 후보 1개로만 만든다 — selection {len(items)}건. "
+                "고른 후보 하나만 selection에 넣어라"
             )
 
         run_dir = Path(ctx.run_dir or ctx.out_root)
@@ -1444,6 +1961,33 @@ class BrandProfile:
         quality = int(spec.get("jpg_quality", 90))
         # 테스트 우회는 명시적 bool true만 — 문자열 "false"가 게이트를 끄지 않게 한다.
         allow = spec.get("allow_brand_checks") is True
+        candidate = dict(item.get("candidate") or {})
+        candidate_gate_rows = list(item.get("gates") or [])
+        if explore:
+            # 부분 상태(게이트·후보 메타 없음)를 통과로 오인하지 않는다.
+            if not (candidate.get("params") or {}).get("shapes"):
+                raise base.ProfileError(
+                    "brand explore: 선택 후보에 도형 정보가 없다 — 다시 렌더한 뒤 pack하라"
+                )
+            present = {str(gate.get("id")) for gate in candidate_gate_rows}
+            missing = sorted(REQUIRED_CANDIDATE_GATE_IDS - present)
+            if missing:
+                raise BrandGateError(
+                    [
+                        {
+                            "id": "candidate.missing",
+                            "detail": "후보 게이트 결과가 빠졌다 — "
+                            + ", ".join(missing),
+                        }
+                    ]
+                )
+            candidate_failures = [
+                gate for gate in candidate_gate_rows if not gate.get("ok")
+            ]
+            if candidate_failures and not allow:
+                raise BrandGateError(candidate_failures)
+            for gate in candidate_failures:
+                gate["skipped"] = True
 
         pdf = pack_dir / "mark.pdf"
         pdf_error: Optional[str] = None
@@ -1472,6 +2016,40 @@ class BrandProfile:
             allow=allow,
         )
 
+        lockup: Optional[Dict[str, Optional[str]]] = None
+        lockup_gates: List[Dict[str, Any]] = []
+        if explore:
+            lockup = brand_marks.render_lockup(
+                ctx.run,
+                _binary(ctx),
+                candidate,
+                str(brand.get("display_name") or brand["name"]),
+                pack_dir,
+                brand["palette"],
+                pdf=brand["pdf"],
+            )
+            lockup_gates = [
+                _gate_lockup(
+                    Path(str(lockup["svg"])),
+                    Path(str(lockup["pdf"])) if lockup.get("pdf") else None,
+                    pdf_required=brand["pdf"],
+                )
+            ]
+            lockup_failures = [gate for gate in lockup_gates if not gate.get("ok")]
+            if lockup_failures and not allow:
+                raise BrandGateError(lockup_failures)
+            elif lockup_failures:
+                for gate in lockup_failures:
+                    gate["skipped"] = True
+        lockup_meta: Optional[Dict[str, Any]] = None
+        if lockup:
+            lockup_meta = {
+                # meta에는 실행 디렉터리와 무관한 상대 이름만 남긴다(결정론).
+                "svg": Path(str(lockup["svg"])).name,
+                "pdf": Path(str(lockup["pdf"])).name if lockup.get("pdf") else None,
+                "sha256": core_artifacts.sha256_file(Path(str(lockup["svg"]))),
+            }
+
         png = pack_dir / f"mark-{width}.png"
         ctx.convert(outlined, png, width, max_height)
         jpg = pack_dir / "mark.jpg"
@@ -1490,6 +2068,11 @@ class BrandProfile:
         paths: List[Path] = [normalized, outlined, png, jpg]
         if pdf.is_file():
             paths.append(pdf)
+        if lockup:
+            for key in ("svg", "pdf"):
+                value = lockup.get(key)
+                if value and Path(value).is_file():
+                    paths.append(Path(value))
         paths += [Path(row["path"]) for row in icons]
         for path in paths:
             if not path.is_file():
@@ -1499,24 +2082,48 @@ class BrandProfile:
                 "size": path.stat().st_size,
             }
 
-        gates_ok = all(gate["ok"] for gate in gates)
+        all_gates = list(gates)
+        if explore:
+            # 후보 게이트와 최종 게이트가 겹치는 3종은 **팩 시점 재검사**를 남기고,
+            # 나머지 후보 게이트만 더한다. 같은 id를 두 번 적지 않는다.
+            shared = {"brand.no_text", "brand.no_style", "brand.raster"}
+            final_shared = [gate for gate in gates if gate["id"] in shared]
+            extra = [gate for gate in candidate_gate_rows if gate["id"] not in shared]
+            pdf_gates = [gate for gate in gates if gate["id"] == "brand.pdf"]
+            all_gates = final_shared + extra + pdf_gates + lockup_gates
+        gates_ok = all(gate["ok"] for gate in all_gates)
+        mark_sha256 = brand.get("sha256") or core_artifacts.sha256_file(outlined)
+        if explore:
+            inputs = {
+                "mode": "explore",
+                "brief_sha256": brand["brief_sha256"],
+                "candidate": candidate,
+                "mark_sha256": mark_sha256,
+                "palette": brand["palette"],
+                "sizes": brand["sizes"],
+                "backgrounds": brand["backgrounds"],
+                "image_width": width,
+                "max_height": max_height,
+                "jpg_quality": quality,
+                "pdf": brand["pdf"],
+            }
+        else:
+            inputs = {
+                "mark_sha256": brand["sha256"],
+                "palette": brand["palette"],
+                "sizes": brand["sizes"],
+                "backgrounds": brand["backgrounds"],
+                "image_width": width,
+                "max_height": max_height,
+                "jpg_quality": quality,
+                "pdf": brand["pdf"],
+            }
         meta = {
             "profile": "brand",
             "name": brand["name"],
-            "mark_path": brand["mark_path"],
-            "mark_sha256": brand["sha256"],
-            "inputs_sha256": core_artifacts.sha256_json(
-                {
-                    "mark_sha256": brand["sha256"],
-                    "palette": brand["palette"],
-                    "sizes": brand["sizes"],
-                    "backgrounds": brand["backgrounds"],
-                    "image_width": width,
-                    "max_height": max_height,
-                    "jpg_quality": quality,
-                    "pdf": brand["pdf"],
-                }
-            ),
+            "mark_path": brand.get("mark_path"),
+            "mark_sha256": mark_sha256,
+            "inputs_sha256": core_artifacts.sha256_json(inputs),
             "palette": brand["palette"],
             "sizes": brand["sizes"],
             "backgrounds": brand["backgrounds"],
@@ -1526,11 +2133,25 @@ class BrandProfile:
             "pdf_requested": brand["pdf"],
             "allow_brand_checks": allow,
             "gates_ok": gates_ok,
-            "gates": gates,
+            "gates": all_gates,
             "normalization": dict(item.get("stats") or {}),
             "artifacts": artifacts,
             "icons": icons,
         }
+        if explore:
+            meta.update(
+                {
+                    "mode": "explore",
+                    "brief": brand["brief"],
+                    "brief_sha256": brand["brief_sha256"],
+                    "candidate": candidate,
+                    "candidate_gates": candidate_gate_rows,
+                    "candidate_gate_summary": candidate_gate_summary(
+                        candidate_gate_rows
+                    ),
+                    "lockup": lockup_meta,
+                }
+            )
         meta_path = pack_dir / "meta.json"
         meta_path.write_text(
             json.dumps(meta, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -1538,16 +2159,37 @@ class BrandProfile:
         )
 
         lines = [f"# 브랜드 팩 — {brand['name']}", ""]
-        lines += [
-            f"- 마크: `{Path(brand['mark_path']).name}` (`{brand['sha256'][:16]}`)",
-            f"- 팔레트: "
-            + " · ".join(f"{key} {value}" for key, value in brand["palette"].items()),
-            f"- 아이콘: {brand['sizes']} × {'/'.join(brand['backgrounds'])}",
-            f"- 입력 지문: `{meta['inputs_sha256'][:16]}`",
-            "",
-            "## 게이트",
-        ]
-        for gate in gates:
+        if explore:
+            lines += [
+                f"- 모드: **explore** — 후보 `{candidate.get('id')}` "
+                f"({candidate.get('family')}, seed `{candidate.get('seed')}`)",
+                f"- 브리프: {brand['brief']}",
+                f"- 브리프 지문: `{brand['brief_sha256'][:16]}`",
+                f"- 팔레트: "
+                + " · ".join(
+                    f"{key} {value}" for key, value in brand["palette"].items()
+                ),
+                f"- 아이콘: {brand['sizes']} × {'/'.join(brand['backgrounds'])}",
+                f"- 락업: `lockup.svg`"
+                + (" · `lockup.pdf`" if lockup and lockup.get("pdf") else ""),
+                f"- 입력 지문: `{meta['inputs_sha256'][:16]}`",
+                f"- 후보 게이트: {candidate_gate_summary(candidate_gate_rows)}",
+                "",
+                "## 게이트",
+            ]
+        else:
+            lines += [
+                f"- 마크: `{Path(brand['mark_path']).name}` (`{brand['sha256'][:16]}`)",
+                f"- 팔레트: "
+                + " · ".join(
+                    f"{key} {value}" for key, value in brand["palette"].items()
+                ),
+                f"- 아이콘: {brand['sizes']} × {'/'.join(brand['backgrounds'])}",
+                f"- 입력 지문: `{meta['inputs_sha256'][:16]}`",
+                "",
+                "## 게이트",
+            ]
+        for gate in all_gates:
             mark = "✓" if gate["ok"] else ("−" if gate.get("skipped") else "✗")
             lines.append(f"- {mark} {gate['id']}: {gate['detail']}")
         lines += ["", "## 산출물"]
@@ -1556,23 +2198,33 @@ class BrandProfile:
         entry_path = pack_dir / "entry.md"
         entry_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-        packed = [
-            {
-                "id": item["id"],
-                "name": brand["name"],
-                "normalized": str(normalized),
-                "outlined": str(outlined),
-                "pdf": str(pdf) if pdf.is_file() else None,
-                "png": str(png),
-                "jpg": str(jpg),
-                "png_size": png.stat().st_size,
-                "jpg_size": jpg.stat().st_size,
-                "pdf_size": pdf.stat().st_size if pdf.is_file() else 0,
-                "sha256": core_artifacts.sha256_file(png),
-                "gates": gates,
-                "icons": icons,
-            }
-        ]
+        packed_item: Dict[str, Any] = {
+            "id": item["id"],
+            "name": brand["name"],
+            "normalized": str(normalized),
+            "outlined": str(outlined),
+            "pdf": str(pdf) if pdf.is_file() else None,
+            "png": str(png),
+            "jpg": str(jpg),
+            "png_size": png.stat().st_size,
+            "jpg_size": jpg.stat().st_size,
+            "pdf_size": pdf.stat().st_size if pdf.is_file() else 0,
+            "sha256": core_artifacts.sha256_file(png),
+            "gates": all_gates,
+            "icons": icons,
+        }
+        if explore:
+            packed_item.update(
+                {
+                    "mode": "explore",
+                    "candidate": candidate,
+                    "candidate_gates": candidate_gate_rows,
+                    "lockup": lockup,
+                    "lockup_svg": (lockup or {}).get("svg"),
+                    "lockup_pdf": (lockup or {}).get("pdf"),
+                }
+            )
+        packed = [packed_item]
 
         artifact_paths: List[Any] = list(paths) + [meta_path, entry_path]
         manifest = base.run_manifest(
@@ -1581,7 +2233,7 @@ class BrandProfile:
             base.collect_artifacts(artifact_paths, run_dir),
             kind="brand",
             status="ok" if gates_ok else "warn",
-            gates=gates,
+            gates=all_gates,
         )
         manifest_path = core_artifacts.write_manifest(run_dir, manifest)
 
@@ -1591,7 +2243,7 @@ class BrandProfile:
             "meta": str(meta_path),
             "manifest": str(manifest_path),
             "manifest_digest": core_artifacts.manifest_digest(manifest),
-            "gates": gates,
+            "gates": all_gates,
         }
 
     def mockups(

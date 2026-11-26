@@ -32,6 +32,17 @@ Sonagi 생태계의 다양한 에이전틱 그래프(Agentic Graphs)를 정의�
 `graphs/profiles/brand.py`의 `review()`·`series_*`가 맡는다
 (`docs/GRAPH_REGISTRY.md` §1·§5).
 
+`brand.mode`는 두 갈래다. `existing`(기본)은 사용자가 만든 SVG(`mark_path`)를
+정규화·아웃라인·게이트·팩한다. `explore`는 브리프에서 **새 마크 방향 6개**를
+시드 결정론으로 만들고, 후보별 게이트를 건 뒤 HITL에서 고른 하나로 브랜드 킷
+(아이콘·락업·PDF)을 만든다(`graphs/brand_marks.py`, §8.4.1).
+
+```bash
+python3 scripts/graph_cli.py run entry_pack --input \
+  '{"brief":"민들레 — 차분한 스튜디오","spec":{"profile":"brand","brand":{"mode":"explore","brief":"민들레 — 차분한 스튜디오","candidates":6}}}' \
+  --wait
+```
+
 ### 서버에서 실행하고 Kimaki로 승인하기
 
 배포된 LangGraph 서버(`:8123`)는 그래프를 assistant로 노출한다. `scripts/graph_cli.py`는

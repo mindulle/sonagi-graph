@@ -201,6 +201,10 @@ def spec_node(state: EntryState) -> Dict[str, Any]:
         spec["breakpoints"] = ["desktop"] if spec["media"] == "web" else ["mobile"]
     if not spec.get("seed"):
         spec["seed"] = hashlib.sha1(str(raw).encode("utf-8")).hexdigest()[:8]
+    # 보강 훅: profile이 브리프를 spec에 주입할 수 있다(brand explore).
+    enrich = getattr(profile, "enrich_spec", None)
+    if callable(enrich):
+        spec = enrich(spec, str(raw))
     # 선택 훅: profile이 입력을 먼저 검증하면 knowledge·LLM 호출 전에 멈춘다.
     validate = getattr(profile, "validate", None)
     if callable(validate):
@@ -461,13 +465,23 @@ def critic_node(state: EntryState) -> Dict[str, Any]:
 def gate_node(state: EntryState) -> Dict[str, Any]:
     """상위 N개를 고르고 사람이 볼 선택지를 만든다."""
     spec = state.get("spec") or {}
+    profile = profiles_base.profile_for_spec(spec)
+    # profile이 후보 최소 통과 수 같은 자체 규칙을 강제할 수 있다(brand explore).
+    check = getattr(profile, "check_candidates", None)
+    if callable(check):
+        check(state.get("renders") or [], spec)
     options = craft.pick(state.get("critiques") or [], limit=int(spec.get("top_n", 9)))
     by_id = {r["id"]: r for r in state.get("renders") or []}
     for option in options:
-        option["svg"] = (by_id.get(option["id"]) or {}).get("svg")
-        option["direction"] = (by_id.get(option["id"]) or {}).get("direction")
-        option["style"] = (by_id.get(option["id"]) or {}).get("style")
-        option["theme"] = (by_id.get(option["id"]) or {}).get("theme")
+        render = by_id.get(option["id"]) or {}
+        option["svg"] = render.get("svg")
+        option["direction"] = render.get("direction")
+        option["style"] = render.get("style")
+        option["theme"] = render.get("theme")
+        # explore 후보가 HITL에서 스스로를 설명할 수 있게 메타를 옮긴다.
+        for key in ("family", "seed", "gate_summary", "gates", "candidate"):
+            if key in render:
+                option[key] = render[key]
     return {"options": options, "status": "gated"}
 
 
@@ -477,19 +491,32 @@ def hitl_node(state: EntryState) -> Dict[str, Any]:
         return {"status": "selected"}
     options = state.get("options") or []
     if state.get("approval_status") == "approved" and options:
+        # 게이트 실패 후보는 자동 선택에서 뺀다. explore는 킷을 후보 하나로만
+        # 만들므로 첫 통과 후보 하나를 고른다.
+        passing = [
+            option
+            for option in options
+            if not (
+                option.get("gates")
+                and any(not gate.get("ok") for gate in option["gates"])
+            )
+        ]
+        candidates = passing or options
+        explore_like = any(option.get("family") for option in candidates)
+        limit = 1 if explore_like else 3
         # 자동 선택은 방향이 겹치지 않게 고른다(같은 스타일 3개는 의미가 없다).
         picked: List[str] = []
         seen_directions = set()
-        for option in options:
+        for option in candidates:
             direction = option.get("direction")
             if direction in seen_directions:
                 continue
             picked.append(option["id"])
             seen_directions.add(direction)
-            if len(picked) >= 3:
+            if len(picked) >= limit:
                 break
         if not picked:
-            picked = [o["id"] for o in options[:3]]
+            picked = [o["id"] for o in candidates[:limit]]
         return {"selection": picked, "status": "selected"}
     return {"approval_status": "pending", "status": "awaiting_selection"}
 
