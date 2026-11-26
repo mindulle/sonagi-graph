@@ -37,11 +37,11 @@ CI가 master에서 성공하면 이미지를 **GitHub prerelease 자산**(`graph
         ▲
         │ 5분마다 최신 image-* 태그 확인 (systemd timer)
         │ 새 태그일 때만 자산 다운로드 → zstd -d → docker load
-        │
- /home/ubuntu/sonagi-graph ── langgraph up --image <로컬 ref> --no-pull
+        │ 배포 클론을 태그 커밋으로 fetch + detached checkout
+ /home/ubuntu/sonagi-graph-deploy ── langgraph up --image <로컬 ref> --no-pull
         │                       + docker-compose.deploy.yml (env/마운트)
         ▼
- sonagi-graph-langgraph-api-1  :8123  (/ok, graph_cli list 11개)
+ sonagi-graph-langgraph-api-1  :8123  (/ok, graph_cli list = langgraph.json graphs)
 ```
 
 - 이미지에는 **앱 코드만** 들어간다. LLM 키, wiki/assets 마운트, 폰트, SSH 키,
@@ -49,6 +49,34 @@ CI가 master에서 성공하면 이미지를 **GitHub prerelease 자산**(`graph
   환경이 계속 공급한다.
 - `langgraph up`은 기본이 `--pull`이라 GHCR에서 당기려다 실패한다. 로컬에 로드한
   이미지를 쓰므로 배포 스크립트는 **`--no-pull`**을 붙인다.
+
+## 배포 클론
+
+타이머는 **`/home/ubuntu/sonagi-graph-deploy`** 만 체크아웃/리셋한다.
+사람이 쓰는 에이전트 체크아웃(`/home/ubuntu/sonagi-graph`)은 배포가 건드리지
+않으므로, 체크아웃이 낡거나 dirty여도 배포가 막히지 않는다.
+
+```bash
+sudo -u ubuntu gh repo clone mindulle/sonagi-graph /home/ubuntu/sonagi-graph-deploy
+```
+
+배포 전에 스크립트가 하는 일:
+
+1. `image-<sha>` 태그에서 sha를 뽑는다.
+2. 배포 클론에서 `origin/master`를 fetch하고, 커밋이 없으면 sha로 직접 fetch한다.
+3. `git checkout --force --detach <sha>` 후 `git rev-parse HEAD`가 sha로
+   시작하는지 확인한다. 다르면 배포하지 않는다.
+4. 배포 클론의 `langgraph.json`에서 기대 그래프 수를 계산한다
+   (`SONAGI_GRAPH_EXPECTED_GRAPHS`로 덮어쓸 수 있다).
+5. `langgraph up`과 `graph_cli list`를 배포 클론에서 실행한다.
+
+`.env`는 추적되지 않으므로(`.gitignore`) 배포 클론에 한 번 복사해 둔다.
+`install.sh`가 없으면 기존 체크아웃의 `.env`를 복사한다. 체크아웃/리셋은
+untracked 파일을 지우지 않는다.
+
+`langgraph up`은 compose 프로젝트 이름을 디렉터리 이름에서 만든다. 배포 클론
+이름이 바뀌어도 기존 스택을 교체하도록 스크립트가
+`COMPOSE_PROJECT_NAME=sonagi-graph`를 고정한다.
 
 ## 크기와 지연
 
@@ -108,19 +136,21 @@ gh release list --repo mindulle/sonagi-graph --limit 5
 
 ## 설치
 
-배포 체크아웃(`/home/ubuntu/sonagi-graph`)에서 root로 실행한다.
+배포 클론(`/home/ubuntu/sonagi-graph-deploy`)에서 root로 실행한다.
 
 ```bash
-cd /home/ubuntu/sonagi-graph
+cd /home/ubuntu/sonagi-graph-deploy
 sudo deploy/install.sh
 ```
 
 설치기는 순서대로:
 
-1. `ubuntu` 사용자로 `gh auth status`, `gh release list`
-2. `deploy/sonagi-graph-deploy.sh --check` (최신 `image-*` 태그 비교, 다운로드 없음)
-3. `zstd` 존재, 릴리스 자산 크기 확인, 디스크 여유(자산×3 + 2GB) 확인
-4. 모두 성공했을 때만 `/etc/systemd/system`에 유닛 복사, `daemon-reload`,
+1. 배포 클론이 git 저장소인지, `origin/master` fetch 권한이 있는지 확인
+2. `.env`가 없으면 기존 체크아웃(`/home/ubuntu/sonagi-graph`)에서 복사
+3. `ubuntu` 사용자로 `gh auth status`, `gh release list`
+4. `deploy/sonagi-graph-deploy.sh --check` (최신 `image-*` 태그 비교, 다운로드 없음)
+5. `zstd` 존재, 릴리스 자산 크기 확인, 디스크 여유(자산×3 + 2GB) 확인
+6. 모두 성공했을 때만 `/etc/systemd/system`에 유닛 복사, `daemon-reload`,
    `enable --now sonagi-graph-deploy.timer`
 
 하나라도 실패하면 유닛을 건드리지 않고 멈춘다.
@@ -129,13 +159,13 @@ sudo deploy/install.sh
 
 ```bash
 # 릴리스 태그만 확인 (다운로드/배포 없음)
-sudo -u ubuntu /home/ubuntu/sonagi-graph/deploy/sonagi-graph-deploy.sh --check
+sudo -u ubuntu /home/ubuntu/sonagi-graph-deploy/deploy/sonagi-graph-deploy.sh --check
 
 # 즉시 1회 (새 태그 없으면 skip)
-sudo -u ubuntu /home/ubuntu/sonagi-graph/deploy/sonagi-graph-deploy.sh
+sudo -u ubuntu /home/ubuntu/sonagi-graph-deploy/deploy/sonagi-graph-deploy.sh
 
 # 같은 태그여도 로컬 이미지로 재배포
-sudo -u ubuntu /home/ubuntu/sonagi-graph/deploy/sonagi-graph-deploy.sh --force
+sudo -u ubuntu /home/ubuntu/sonagi-graph-deploy/deploy/sonagi-graph-deploy.sh --force
 
 # systemd로 1회
 sudo systemctl start sonagi-graph-deploy.service
@@ -149,12 +179,13 @@ sudo systemctl start sonagi-graph-deploy.service
 상태 파일이 직전 성공 태그와 로컬 ref를 들고 있으므로 한 명령이다.
 
 ```bash
-sudo -u ubuntu /home/ubuntu/sonagi-graph/deploy/sonagi-graph-deploy.sh --rollback
+sudo -u ubuntu /home/ubuntu/sonagi-graph-deploy/deploy/sonagi-graph-deploy.sh --rollback
 ```
 
 - `--rollback`은 `previous_tag`의 이미지를 로컬에서 찾고, 없으면 해당 릴리스
-  자산을 다시 받아 `docker load`한 뒤 `--no-pull`로 올린다. health check
-  (`/ok` + `graph_cli list` 11개)를 통과하면 성공으로 기록한다.
+  자산을 다시 받아 `docker load`한 뒤, 배포 클론을 그 태그의 커밋으로
+  체크아웃하고 `--no-pull`로 올린다. health check(`/ok` + `graph_cli list`가
+  해당 커밋의 `langgraph.json` 그래프 수와 일치)를 통과하면 성공으로 기록한다.
 - 새 태그 배포가 실패하면 스크립트가 **직전 성공 태그**로 자동 롤백한다.
   실패한 태그는 `failed_tag`에 남고, 같은 태그가 최신인 동안은 타이머가
   재시도하지 않는다(필요하면 `--force`).
@@ -238,15 +269,17 @@ GHCR read를 쓰려면 **classic PAT**(`read:packages`)가 필요하다.
 | `langgraph up`이 pull 시도 | `--no-pull` 누락. 스크립트를 최신 master로 갱신 |
 | platform mismatch (amd64/arm64) | CI가 arm64로 빌드했는지 확인. 스크립트가 배포 전 아키텍처를 검사한다 |
 | 첫 배포 실패 후 서비스 down | 스크립트가 배포 전 실행 중이던 이미지로 자동 복구를 시도한다. 실패 시 `langgraph up --image sonagi-graph-langgraph-api:latest --no-pull` |
-| 그래프 수 < 11 | health 실패로 처리하고 직전 태그로 자동 롤백 |
+| 그래프 수가 langgraph.json과 다름 | health 실패로 처리하고 직전 태그로 자동 롤백. 기대 수는 배포 클론의 `langgraph.json`에서 계산한다 |
+| 배포 클론 체크아웃 실패 | `sudo -u ubuntu git -C /home/ubuntu/sonagi-graph-deploy fetch origin master`. detached HEAD는 정상이다 |
 | 롤백도 실패 | `journalctl -u sonagi-graph-deploy.service`, `docker compose -p sonagi-graph ps` |
 
 ## 관련 파일
 
 - `.github/workflows/image.yml` — CI 성공 후 이미지 빌드/압축/릴리스 업로드(+GHCR 미러)
-- `deploy/sonagi-graph-deploy.sh` — 릴리스 자산 pull 배포 본체
+- `deploy/sonagi-graph-deploy.sh` — 릴리스 자산 pull + 배포 클론 체크아웃 배포 본체
 - `deploy/deploy_state.py` — 태그 정규화/상태 전이 (표준 라이브러리)
 - `deploy/sonagi-graph-deploy.service`, `.timer` — systemd 유닛
-- `deploy/install.sh` — gh/릴리스/zstd/디스크 검증 후 유닛 설치
+- `deploy/install.sh` — gh/릴리스/git/zstd/디스크 검증 후 유닛 설치
 - `deploy/test_deploy_state.py` — 상태 전이 테스트
+- `deploy/test_deploy_script.py` — 태그→sha, 그래프 수 계산, 체크아웃 테스트
 - `docker-compose.deploy.yml` — 런타임 env/마운트 (이미지 밖)

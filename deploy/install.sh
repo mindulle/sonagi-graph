@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
 # sonagi-graph release-asset 배포 유닛 설치기.
 #
-#   1) ubuntu 사용자로 gh 인증 / 릴리스 목록 / zstd / 디스크 여유 확인
+#   1) ubuntu 사용자로 gh 인증 / 릴리스 목록 / git fetch / zstd / 디스크 여유 확인
 #   2) ubuntu 사용자로 deploy 스크립트 --check (최신 image-* 태그 비교)
 #   3) 모두 성공했을 때만 systemd 유닛을 복사하고 타이머를 켠다.
 #
 # GHCR 로그인은 하지 않는다. 기존 repo-scoped gh 토큰으로 릴리스 자산을 받는다.
 # 하나라도 실패하면 유닛을 건드리지 않는다.
+#
+# 이 스크립트는 배포 클론(`/home/ubuntu/sonagi-graph-deploy`)에서 root로 실행한다.
+# 에이전트 체크아웃(`/home/ubuntu/sonagi-graph`)은 읽기 전용으로만 참조한다(.env 복사).
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-EXPECTED_REPO="/home/ubuntu/sonagi-graph"
+EXPECTED_REPO="/home/ubuntu/sonagi-graph-deploy"
+LEGACY_REPO="/home/ubuntu/sonagi-graph"
 GITHUB_REPO="${SONAGI_GRAPH_GITHUB_REPO:-mindulle/sonagi-graph}"
+GIT_BRANCH="${SONAGI_GRAPH_BRANCH:-master}"
 ASSET_NAME="${SONAGI_GRAPH_ASSET:-graph-image.tar.zst}"
 UNIT_DIR="/etc/systemd/system"
 TIMER="sonagi-graph-deploy.timer"
@@ -48,7 +53,7 @@ for file in \
   fi
 done
 
-for cmd in gh docker zstd runuser systemctl "$PYTHON" df; do
+for cmd in gh docker zstd git runuser systemctl "$PYTHON" df; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     log "필수 명령이 없습니다: $cmd"
     exit 1
@@ -63,6 +68,31 @@ fi
 as_ubuntu() {
   runuser -u ubuntu -- env HOME=/home/ubuntu "$@"
 }
+
+# 배포 클론은 타이머가 체크아웃/리셋하는 유일한 트리다.
+if ! as_ubuntu git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  log "배포 클론이 git 저장소가 아닙니다: $REPO_DIR"
+  exit 1
+fi
+log "배포 클론 origin: $(as_ubuntu git -C "$REPO_DIR" config --get remote.origin.url)"
+
+# .env는 추적되지 않는다(.gitignore). 배포 클론에는 한 번 복사해 두면
+# 체크아웃/리셋에도 남는다. 없으면 기존 체크아웃에서 읽어 온다.
+if [ ! -f "$REPO_DIR/.env" ]; then
+  if [ -f "$LEGACY_REPO/.env" ]; then
+    install -o ubuntu -g ubuntu -m 0600 "$LEGACY_REPO/.env" "$REPO_DIR/.env"
+    log ".env를 $LEGACY_REPO 에서 배포 클론으로 복사했습니다."
+  else
+    log "배포 클론에 .env가 없습니다. $LEGACY_REPO/.env 도 없으니 수동으로 채우세요."
+    exit 1
+  fi
+fi
+
+# fetch 권한(gh credential helper)을 유닛 설치 전에 확인한다.
+if ! as_ubuntu git -C "$REPO_DIR" ls-remote --exit-code origin "refs/heads/$GIT_BRANCH" >/dev/null; then
+  log "origin/$GIT_BRANCH fetch 권한이 없습니다. gh auth 상태와 git credential 설정을 확인하세요."
+  exit 1
+fi
 
 # 1) gh 인증과 릴리스 목록. GHCR 로그인은 하지 않는다.
 log "gh 인증 확인 (ubuntu 사용자)"

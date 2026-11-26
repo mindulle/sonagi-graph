@@ -11,13 +11,39 @@
 #   deploy/sonagi-graph-deploy.sh --force    # 같은 태그여도 재배포
 #   deploy/sonagi-graph-deploy.sh --rollback # 상태 파일의 previous_tag로 되돌림
 #
-# 이미지에는 앱 코드만 들어 있다. 런타임 env/마운트는 저장소의
-# docker-compose.deploy.yml이 계속 공급한다.
+# 이미지에는 앱 코드만 들어 있다. 런타임 env/마운트와 langgraph.json은 저장소의
+# docker-compose.deploy.yml과 배포 클론이 계속 공급한다.
+#
+# 배포 클론(`/home/ubuntu/sonagi-graph-deploy`)은 타이머만 체크아웃/리셋하는
+# 트리다. 배포 전에 `image-<sha>` 태그의 커밋을 fetch해 detached로 맞춘 뒤
+# `langgraph up`과 `graph_cli list`를 그 트리에서 실행한다. 사람이 쓰는
+# 에이전트 체크아웃(`/home/ubuntu/sonagi-graph`)은 건드리지 않는다.
 
 set -euo pipefail
 
+# 배포 클론을 대상 커밋으로 체크아웃하는 과정에서 이 스크립트 파일 자체가
+# 바뀔 수 있다. bash는 스크립트를 실행 중에 조금씩 읽으므로, 임시 사본으로
+# 한 번 재실행해 실행 중 파일 교체의 영향을 받지 않게 한다.
+# (SONAGI_GRAPH_DEPLOY_LIB_ONLY=1로 source하면 함수만 정의하고 멈춘다.)
+if [ "${SONAGI_GRAPH_DEPLOY_LIB_ONLY:-}" != "1" ] &&
+  [ "${SONAGI_GRAPH_DEPLOY_REEXEC:-}" != "1" ]; then
+  _deploy_src="${BASH_SOURCE[0]}"
+  _deploy_tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/sonagi-graph-deploy.XXXXXX")"
+  cp "$_deploy_src" "$_deploy_tmpdir/sonagi-graph-deploy.sh"
+  if [ -f "$(dirname "$_deploy_src")/deploy_state.py" ]; then
+    cp "$(dirname "$_deploy_src")/deploy_state.py" "$_deploy_tmpdir/deploy_state.py"
+  fi
+  SONAGI_GRAPH_DEPLOY_REEXEC=1 SONAGI_GRAPH_DEPLOY_TMPDIR="$_deploy_tmpdir" \
+    exec bash "$_deploy_tmpdir/sonagi-graph-deploy.sh" "$@"
+fi
+if [ -n "${SONAGI_GRAPH_DEPLOY_TMPDIR:-}" ]; then
+  trap 'rm -rf "$SONAGI_GRAPH_DEPLOY_TMPDIR"' EXIT
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="${SONAGI_GRAPH_REPO:-/home/ubuntu/sonagi-graph}"
+REPO_DIR="${SONAGI_GRAPH_REPO:-/home/ubuntu/sonagi-graph-deploy}"
+GIT_BRANCH="${SONAGI_GRAPH_BRANCH:-master}"
+COMPOSE_PROJECT="${SONAGI_GRAPH_COMPOSE_PROJECT:-sonagi-graph}"
 GITHUB_REPO="${SONAGI_GRAPH_GITHUB_REPO:-mindulle/sonagi-graph}"
 IMAGE="${SONAGI_GRAPH_IMAGE:-ghcr.io/mindulle/sonagi-graph}"
 ASSET_NAME="${SONAGI_GRAPH_ASSET:-graph-image.tar.zst}"
@@ -25,7 +51,8 @@ STATE_FILE="${SONAGI_GRAPH_STATE:-/home/ubuntu/.sonagi-graph-deploy.json}"
 LOG_FILE="${SONAGI_GRAPH_DEPLOY_LOG:-/home/ubuntu/sonagi-graph-deploy.log}"
 LOCK_FILE="${SONAGI_GRAPH_LOCK:-/home/ubuntu/.sonagi-graph-deploy.lock}"
 HEALTH_URL="${SONAGI_GRAPH_HEALTH_URL:-http://127.0.0.1:8123/ok}"
-EXPECTED_GRAPHS="${SONAGI_GRAPH_EXPECTED_GRAPHS:-11}"
+# 비워 두면 배포 클론의 langgraph.json에서 계산한다. 테스트/비상용 override.
+EXPECTED_GRAPHS="${SONAGI_GRAPH_EXPECTED_GRAPHS:-}"
 DOCKER="${DOCKER:-docker}"
 DOCKER_ROOT="${SONAGI_GRAPH_DOCKER_ROOT:-/var/lib/docker}"
 LANGGRAPH="${LANGGRAPH:-langgraph}"
@@ -59,66 +86,19 @@ usage() {
   -h, --help   이 도움말.
 
 환경 변수(테스트/운영):
-  SONAGI_GRAPH_REPO, SONAGI_GRAPH_GITHUB_REPO, SONAGI_GRAPH_IMAGE,
+  SONAGI_GRAPH_REPO, SONAGI_GRAPH_BRANCH, SONAGI_GRAPH_COMPOSE_PROJECT,
+  SONAGI_GRAPH_GITHUB_REPO, SONAGI_GRAPH_IMAGE, SONAGI_GRAPH_EXPECTED_GRAPHS,
   SONAGI_GRAPH_STATE, SONAGI_GRAPH_DEPLOY_LOG, SONAGI_GRAPH_LOCK,
   SONAGI_GRAPH_HEALTH_URL, SONAGI_GRAPH_PRUNE_KEEP,
   SONAGI_GRAPH_DOCKER_ROOT, DOCKER, LANGGRAPH, PYTHON, GH, ZSTD
 EOF
 }
 
-MODE="deploy"
-FORCE=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --check) MODE="check" ;;
-    --force) FORCE="1" ;;
-    --rollback) MODE="rollback" ;;
-    -h | --help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "알 수 없는 옵션: $1" >&2
-      usage >&2
-      exit 2
-      ;;
-  esac
-  shift
-done
-
-mkdir -p "$(dirname "$LOG_FILE")"
-if [ -f "$LOG_FILE" ] && [ "$(stat -c %s "$LOG_FILE" 2>/dev/null || echo 0)" -gt "$LOG_MAX_BYTES" ]; then
-  mv -f "$LOG_FILE" "$LOG_FILE.1"
-fi
-
 # 로그는 stderr로도 보낸다. systemd는 StandardError=journal로 받고,
 # 명령 치환(`$(ensure_image ...)`)이 로그를 값으로 삼키지 않는다.
 log() {
   printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" | tee -a "$LOG_FILE" >&2
 }
-
-# 동시 실행 방지. 타이머와 수동 실행이 겹치면 한쪽만 진행한다.
-exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
-  log "다른 배포가 실행 중입니다. 이번 회차를 건너뜁니다."
-  exit 0
-fi
-
-for cmd in "$GH" "$PYTHON" curl; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    log "필수 명령이 없습니다: $cmd"
-    exit 1
-  fi
-done
-if [ ! -f "$STATE_HELPER" ]; then
-  log "상태 헬퍼가 없습니다: $STATE_HELPER"
-  exit 1
-fi
-
-if ! "$GH" auth status >/dev/null 2>&1; then
-  log "gh 인증이 필요합니다: gh auth login (repo scope)"
-  exit 1
-fi
 
 # gh 2.4에는 `release list --json`이 없다. 있으면 그대로 쓰고, 없으면
 # releases REST API로 같은 정보를 얻는다. 둘 다 JSON 배열을 stdout에 낸다.
@@ -192,6 +172,120 @@ else:
 
 image_ref_for_tag() {
   printf '%s:sha-%s' "$IMAGE" "${1#image-}"
+}
+
+# image-<sha>에서 sha만 뽑는다. 태그는 이미 정규화됐지만 여기서도 검증한다.
+tag_sha() {
+  local sha="${1#image-}"
+  case "$sha" in
+    '' | *[!0-9a-fA-F]*)
+      log "릴리스 태그에서 sha를 뽑을 수 없습니다: $1"
+      return 1
+      ;;
+  esac
+  if [ "${#sha}" -lt 7 ] || [ "${#sha}" -gt 40 ]; then
+    log "릴리스 태그의 sha 길이가 7~40자가 아닙니다: $1"
+    return 1
+  fi
+  printf '%s' "$sha" | tr 'A-F' 'a-f'
+}
+
+# 로컬 이미지 ref에서 릴리스 태그를 되돌린다(롤백/기준 이미지용).
+tag_from_image_ref() {
+  local ref="$1"
+  case "$ref" in
+    "$IMAGE":sha-*)
+      printf 'image-%s' "${ref#"$IMAGE":sha-}"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# 기대 그래프 수. 배포 클론의 langgraph.json이 정본이고,
+# SONAGI_GRAPH_EXPECTED_GRAPHS가 있으면 그 값을 쓴다.
+derive_expected_graphs() {
+  local config="$REPO_DIR/langgraph.json" count=""
+  if [ -n "${SONAGI_GRAPH_EXPECTED_GRAPHS:-}" ]; then
+    case "$SONAGI_GRAPH_EXPECTED_GRAPHS" in
+      *[!0-9]*)
+        log "SONAGI_GRAPH_EXPECTED_GRAPHS가 숫자가 아닙니다: $SONAGI_GRAPH_EXPECTED_GRAPHS"
+        return 1
+        ;;
+    esac
+    printf '%s' "$SONAGI_GRAPH_EXPECTED_GRAPHS"
+    return 0
+  fi
+  if [ ! -f "$config" ]; then
+    log "langgraph.json이 없습니다: $config (배포 클론 체크아웃을 확인하세요)"
+    return 1
+  fi
+  if ! count="$(
+    "$PYTHON" - "$config" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        data = json.load(handle)
+    graphs = data["graphs"]
+    if not isinstance(graphs, dict):
+        raise TypeError("graphs가 객체가 아닙니다")
+except Exception as exc:  # noqa: BLE001 - 원인을 그대로 보여준다
+    print(f"langgraph.json을 읽지 못했습니다: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+print(len(graphs))
+PY
+  )"; then
+    log "기대 그래프 수를 계산하지 못했습니다: $config"
+    return 1
+  fi
+  case "$count" in
+    '' | *[!0-9]*)
+      log "기대 그래프 수가 숫자가 아닙니다: '$count' ($config)"
+      return 1
+      ;;
+  esac
+  printf '%s' "$count"
+}
+
+# 배포 클론을 릴리스 태그의 정확한 커밋으로 맞춘다. 배포 클론은 타이머만
+# 리셋하는 트리이므로 --force/detached 체크아웃을 허용한다.
+prepare_checkout() {
+  local tag="$1" sha="" head=""
+  sha="$(tag_sha "$tag")" || return 1
+  if ! git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+    log "배포 클론이 git 저장소가 아닙니다: $REPO_DIR"
+    return 1
+  fi
+  log "배포 클론 fetch: $tag (origin/$GIT_BRANCH)"
+  if ! git -C "$REPO_DIR" fetch --force --prune origin \
+    "+refs/heads/$GIT_BRANCH:refs/remotes/origin/$GIT_BRANCH" >&2; then
+    log "fetch 실패: origin/$GIT_BRANCH ($REPO_DIR)"
+    return 1
+  fi
+  if ! git -C "$REPO_DIR" cat-file -e "${sha}^{commit}" 2>/dev/null; then
+    log "커밋 $sha 가 origin/$GIT_BRANCH 에 없습니다. sha로 직접 fetch합니다."
+    if ! git -C "$REPO_DIR" fetch --force origin "$sha" >&2; then
+      log "커밋을 fetch하지 못했습니다: $sha ($tag)"
+      return 1
+    fi
+  fi
+  if ! git -C "$REPO_DIR" checkout --force --detach "$sha" >&2; then
+    log "체크아웃 실패: $sha ($tag)"
+    return 1
+  fi
+  if ! head="$(git -C "$REPO_DIR" rev-parse HEAD)"; then
+    log "체크아웃 후 HEAD를 읽지 못했습니다: $REPO_DIR"
+    return 1
+  fi
+  case "$head" in
+    "$sha"*) ;;
+    *)
+      log "체크아웃 검증 실패: HEAD=$head, 기대=$sha ($tag)"
+      return 1
+      ;;
+  esac
+  log "배포 클론 체크아웃: $tag -> $head"
 }
 
 # 로드한 이미지가 이 호스트에서 실행 가능한 아키텍처인지 확인한다.
@@ -292,14 +386,21 @@ run_langgraph() {
   local ref="$1"
   (
     cd "$REPO_DIR"
+    # compose 프로젝트 이름은 디렉터리 이름에서 나온다. 배포 클론 이름이
+    # 바뀌어도 기존 스택(sonagi-graph)을 그대로 교체하도록 고정한다.
     # 로컬에 로드한 이미지를 쓴다. --pull(기본값)이면 GHCR에서 당기려다 실패한다.
-    "$LANGGRAPH" up -p 8123 -d docker-compose.deploy.yml \
+    COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT" \
+      "$LANGGRAPH" up -p 8123 -d docker-compose.deploy.yml \
       --image "$ref" --no-pull --wait --recreate
   )
 }
 
 health_check() {
   local attempt=0 list="" count=""
+  if [ -z "$EXPECTED_GRAPHS" ]; then
+    log "기대 그래프 수가 비어 있습니다. langgraph.json 계산 단계를 확인하세요."
+    return 1
+  fi
   while [ "$attempt" -lt 30 ]; do
     if curl -fsS --max-time 3 "$HEALTH_URL" >/dev/null 2>&1; then
       break
@@ -317,7 +418,7 @@ health_check() {
   fi
   count="$(printf '%s\n' "$list" | grep -c '[^[:space:]]' || true)"
   if [ "$count" -ne "$EXPECTED_GRAPHS" ]; then
-    log "그래프 수가 $EXPECTED_GRAPHS가 아니라 $count입니다."
+    log "그래프 수가 ${EXPECTED_GRAPHS}개가 아니라 ${count}개입니다."
     return 1
   fi
   log "health OK: /ok 응답, 그래프 ${count}개"
@@ -332,6 +433,55 @@ deploy_and_verify() {
   fi
   health_check
 }
+
+main() {
+  MODE="deploy"
+  FORCE=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --check) MODE="check" ;;
+      --force) FORCE="1" ;;
+      --rollback) MODE="rollback" ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      *)
+        echo "알 수 없는 옵션: $1" >&2
+        usage >&2
+        exit 2
+        ;;
+    esac
+    shift
+  done
+
+  mkdir -p "$(dirname "$LOG_FILE")"
+  if [ -f "$LOG_FILE" ] && [ "$(stat -c %s "$LOG_FILE" 2>/dev/null || echo 0)" -gt "$LOG_MAX_BYTES" ]; then
+    mv -f "$LOG_FILE" "$LOG_FILE.1"
+  fi
+
+  # 동시 실행 방지. 타이머와 수동 실행이 겹치면 한쪽만 진행한다.
+  exec 9>"$LOCK_FILE"
+  if ! flock -n 9; then
+    log "다른 배포가 실행 중입니다. 이번 회차를 건너뜁니다."
+    exit 0
+  fi
+
+  for cmd in "$GH" "$PYTHON" curl; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      log "필수 명령이 없습니다: $cmd"
+      exit 1
+    fi
+  done
+  if [ ! -f "$STATE_HELPER" ]; then
+    log "상태 헬퍼가 없습니다: $STATE_HELPER"
+    exit 1
+  fi
+
+  if ! "$GH" auth status >/dev/null 2>&1; then
+    log "gh 인증이 필요합니다: gh auth login (repo scope)"
+    exit 1
+  fi
 
 if [ "$MODE" = "rollback" ]; then
   DEPLOY_TAG="$("$PYTHON" "$STATE_HELPER" get --state "$STATE_FILE" --field previous_tag)"
@@ -378,7 +528,7 @@ if [ "$ACTION" = "blocked" ]; then
   exit 1
 fi
 
-for cmd in "$DOCKER" "$ZSTD" "$LANGGRAPH"; do
+for cmd in "$DOCKER" "$ZSTD" "$LANGGRAPH" git; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     log "필수 명령이 없습니다: $cmd"
     exit 1
@@ -386,6 +536,31 @@ for cmd in "$DOCKER" "$ZSTD" "$LANGGRAPH"; do
 done
 
 log "배포 시도: $DEPLOY_TAG ($ACTION: $REASON)"
+
+if [ ! -f "$REPO_DIR/.env" ]; then
+  log "배포 클론에 .env가 없습니다: $REPO_DIR/.env"
+  log "install.sh가 기존 체크아웃의 .env를 복사합니다. 없으면 수동으로 채우세요."
+  exit 1
+fi
+
+# 이미지를 받기 전에 배포 클론을 정확한 커밋으로 맞춘다. 그래야 langgraph.json과
+# graph_cli가 이미지와 같은 코드를 본다.
+if ! prepare_checkout "$DEPLOY_TAG"; then
+  log "배포 클론을 $DEPLOY_TAG 커밋으로 맞추지 못했습니다."
+  exit 1
+fi
+if ! EXPECTED_GRAPHS="$(derive_expected_graphs)"; then
+  if [ "$MODE" = "deploy" ]; then
+    # 릴리스 자체가 잘못된 경우(예: langgraph.json 없음/깨짐)는 같은 태그를
+    # 5분마다 재시도하지 않도록 실패로 기록한다.
+    "$PYTHON" "$STATE_HELPER" failure --state "$STATE_FILE" --tag "$DEPLOY_TAG" \
+      --error "langgraph.json에서 기대 그래프 수를 계산하지 못했습니다"
+  fi
+  log "릴리스 메타데이터가 잘못되어 배포하지 않습니다: $DEPLOY_TAG"
+  exit 1
+fi
+log "기대 그래프 수: ${EXPECTED_GRAPHS}개 ($REPO_DIR/langgraph.json)"
+
 if ! IMAGE_REF="$(ensure_image "$DEPLOY_TAG")"; then
   # 다운로드/압축 해제 실패는 일시적일 수 있으므로 failed_tag로 막지 않는다.
   log "이미지를 준비하지 못했습니다: $DEPLOY_TAG"
@@ -426,7 +601,15 @@ if [ -n "$ROLLBACK_TAG" ] && [ "$ROLLBACK_TAG" != "$DEPLOY_TAG" ]; then
       exit 1
     fi
   fi
-  log "이전 릴리스로 롤백: $ROLLBACK_TAG ($ROLLBACK_REF)"
+  if ! prepare_checkout "$ROLLBACK_TAG"; then
+    log "롤백 커밋을 배포 클론에 맞추지 못했습니다: $ROLLBACK_TAG"
+    exit 1
+  fi
+  if ! EXPECTED_GRAPHS="$(derive_expected_graphs)"; then
+    log "롤백 릴리스의 기대 그래프 수를 계산하지 못했습니다: $ROLLBACK_TAG"
+    exit 1
+  fi
+  log "이전 릴리스로 롤백: $ROLLBACK_TAG ($ROLLBACK_REF, 그래프 ${EXPECTED_GRAPHS}개)"
   if deploy_and_verify "$ROLLBACK_REF"; then
     log "롤백 성공: $ROLLBACK_TAG (상태 파일은 그대로)"
   else
@@ -434,6 +617,18 @@ if [ -n "$ROLLBACK_TAG" ] && [ "$ROLLBACK_TAG" != "$DEPLOY_TAG" ]; then
   fi
 elif [ -n "$BASELINE_REF" ]; then
   log "상태에 이전 릴리스가 없어 배포 전 이미지로 복구: $BASELINE_REF"
+  if ! BASELINE_TAG="$(tag_from_image_ref "$BASELINE_REF")"; then
+    log "복구 이미지에서 릴리스 태그를 찾지 못했습니다: $BASELINE_REF"
+    exit 1
+  fi
+  if ! prepare_checkout "$BASELINE_TAG"; then
+    log "복구 커밋을 배포 클론에 맞추지 못했습니다: $BASELINE_TAG"
+    exit 1
+  fi
+  if ! EXPECTED_GRAPHS="$(derive_expected_graphs)"; then
+    log "복구 릴리스의 기대 그래프 수를 계산하지 못했습니다: $BASELINE_TAG"
+    exit 1
+  fi
   if deploy_and_verify "$BASELINE_REF"; then
     log "복구 성공: $BASELINE_REF (상태 파일은 비어 있음)"
   else
@@ -443,3 +638,12 @@ else
   log "롤백할 이전 릴리스가 없습니다."
 fi
 exit 1
+}
+
+# 테스트/디버깅: `SONAGI_GRAPH_DEPLOY_LIB_ONLY=1 source ...`로 함수만 읽는다.
+if [ "${SONAGI_GRAPH_DEPLOY_LIB_ONLY:-}" = "1" ]; then
+  # shellcheck disable=SC2317  # source 전용 경로. 직접 실행하면 exit로 끝난다.
+  return 0 2>/dev/null || exit 0
+fi
+
+main "$@"
