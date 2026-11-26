@@ -263,10 +263,10 @@ def test_refine_families_validation(tmp_path):
     with pytest.raises(base.ProfileError):
         brand_profile.brand_spec(_spec(tmp_path, families=[]))
     with pytest.raises(base.ProfileError):
-        brand_profile.brand_spec(_spec(tmp_path, families="negative-cut"))
+        brand_profile.brand_spec(_spec(tmp_path, families="seal-monogram"))
 
-    brand = brand_profile.brand_spec(_spec(tmp_path, families=["negative-cut"]))
-    assert brand["families"] == ["negative-cut"]
+    brand = brand_profile.brand_spec(_spec(tmp_path, families=["seal-monogram"]))
+    assert brand["families"] == ["seal-monogram"]
 
 
 def test_refine_requires_brief(tmp_path):
@@ -316,17 +316,73 @@ def test_refine_plan_changes_with_brief(tmp_path):
 def test_refine_plan_covers_every_family(tmp_path):
     candidates = _candidates(tmp_path)
     assert len(candidates) == 8
+    assert len(v2.FAMILIES) == 3
     assert {row["family"] for row in candidates} == set(v2.FAMILIES)
     assert len({row["id"] for row in candidates}) == 8
 
 
+def test_negative_cut_is_a_modifier_not_a_family(tmp_path):
+    assert "negative-cut" not in v2.FAMILIES
+    assert tuple(v2.MODIFIERS) == ("none", "negative-cut")
+    candidates = _candidates(tmp_path)
+    cut = [row for row in candidates if row["params"]["modifier"] == "negative-cut"]
+    assert cut
+    assert {row["family"] for row in cut} == set(v2.FAMILIES)
+    for row in cut:
+        assert "-cut-" in row["id"]
+        assert row["params"]["cut"]["modifier"] == "negative-cut"
+
+
+def test_every_candidate_keeps_the_seal_frame(tmp_path):
+    for candidate in _candidates(tmp_path):
+        rings = [
+            shape
+            for shape in candidate["params"]["shapes"]
+            if shape["kind"] == "circle"
+            and shape.get("stroke")
+            and float(shape["r"]) >= v2.OUTER_RADIUS * 0.55
+        ]
+        assert len(rings) >= 2, candidate["id"]
+        svg = v2.candidate_svg(candidate, PALETTE)
+        assert svg.count("stroke-width=") >= 2
+        # 글자만·방사선만 남은 마크는 없다 — 모든 후보가 인장 링을 갖는다.
+        assert candidate["params"]["ring_weights"]
+
+
+def test_negative_cut_keeps_frame_and_carves_the_family_motif(tmp_path):
+    cut = [
+        row
+        for row in _candidates(tmp_path)
+        if row["params"]["modifier"] == "negative-cut"
+    ]
+    assert cut
+    for candidate in cut:
+        params = candidate["params"]
+        carved = [
+            shape
+            for shape in params["shapes"]
+            if shape["kind"] == "path" and shape.get("fill_rule") == "nonzero"
+        ]
+        assert len(carved) == 1
+        assert carved[0]["d"].count("M ") >= 3
+        # 바깥 인장 링은 그대로다 — 음각은 중심부만 바꾼다.
+        assert len(params["ring_weights"]) >= 2
+        assert params["cut"]["holes"] >= 1
+    shapes = {row["family"]: row["params"]["cut"]["shape"] for row in cut}
+    assert shapes == {
+        "seal-refined": "sunburst",
+        "seal-monogram": "monogram",
+        "seal-dandelion": "seed-rays",
+    }
+
+
 def test_refine_plan_respects_family_subset(tmp_path):
-    candidates = _candidates(tmp_path, families=["negative-cut", "seal-refined"])
-    assert {row["family"] for row in candidates} == {"negative-cut", "seal-refined"}
+    candidates = _candidates(tmp_path, families=["seal-dandelion", "seal-refined"])
+    assert {row["family"] for row in candidates} == {"seal-dandelion", "seal-refined"}
 
 
 def test_refine_dandelion_derives_angles_from_source(tmp_path):
-    candidates = _candidates(tmp_path, families=["abstract-dandelion"])
+    candidates = _candidates(tmp_path, families=["seal-dandelion"])
     model = v2.analyze_source(_seal_svg())
     for candidate in candidates:
         phase = candidate["params"]["phase_shift"]
@@ -411,7 +467,7 @@ def test_overshoot_gate_fails_when_zeroed(tmp_path):
 
 
 def test_monogram_is_optically_centered(tmp_path):
-    for candidate in _candidates(tmp_path, families=["monogram-in-seal"]):
+    for candidate in _candidates(tmp_path, families=["seal-monogram"]):
         mono = candidate["params"]["monogram"]
         segments, bounds = v2._monogram_box(mono["glyph"], mono["box"], mono["weight"])
         assert len(segments) >= 3
@@ -435,14 +491,17 @@ def test_counters_stay_open_at_16px():
 
 
 def test_negative_cut_is_a_real_hole(tmp_path):
-    for candidate in _candidates(tmp_path, families=["negative-cut"]):
+    cut = [
+        row
+        for row in _candidates(tmp_path)
+        if row["params"]["modifier"] == "negative-cut"
+    ]
+    assert cut
+    for candidate in cut:
         svg = v2.candidate_svg(candidate, PALETTE)
-        assert 'fill-rule="evenodd"' in svg
-        paths = re.findall(r'<path d="([^"]+)"', svg)
-        assert len(paths) == 1
-        assert paths[0].count("M ") >= 4
-        assert candidate["params"]["cut"]["shape"] == "seed"
-        assert candidate["params"]["ring_weights"] == []
+        assert 'fill-rule="nonzero"' in svg
+        assert candidate["params"]["modifier"] == "negative-cut"
+        assert candidate["params"]["ring_weights"]
 
 
 def test_craft_gates_cover_all_refine_rule_ids(tmp_path):
@@ -516,7 +575,7 @@ def test_gate_table_markdown_marks_failures_and_notes():
         },
         {
             "id": "refine-b",
-            "family": "negative-cut",
+            "family": "seal-dandelion",
             "note": "씨앗을 파냄",
             "gates": [{"id": "candidate.palette_roles", "ok": True, "detail": "ok"}],
         },
@@ -602,7 +661,7 @@ def test_refine_never_auto_selects(tmp_path):
         },
         {
             "id": "refine-b",
-            "family": "negative-cut",
+            "family": "seal-dandelion",
             "gates": [{"id": "x", "ok": True}],
         },
     ]
