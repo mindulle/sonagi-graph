@@ -34,7 +34,14 @@ ALL_LOGO_AXES = set(COMMON_AXES + ASSET_PACK_AXES["logo"])
 VALID_VERDICTS = {"A", "B", "TIE", "BOTH_REJECT", "NEEDS_HUMAN"}
 ABSTAIN_VERDICTS = {"NEEDS_HUMAN", "TIE"}
 DIRECTIONAL_VERDICTS = {"A", "B"}
-VALID_VERSIONS = {"horizontal", "stacked", "symbol_only", "monochrome", "inverse", "favicon"}
+VALID_VERSIONS = {
+    "horizontal",
+    "stacked",
+    "symbol_only",
+    "monochrome",
+    "inverse",
+    "favicon",
+}
 HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{2,63}$")
 FORBIDDEN_SCORE_KEYS = {"score", "scores", "rating", "ratings", "points", "total_score"}
@@ -60,7 +67,15 @@ def is_gold_empty(fixture: dict[str, Any]) -> bool:
 def validate_fixture(data: dict[str, Any], source: str = "<memory>") -> list[str]:
     """Validate a single fixture dict against the GRAPH-53 schema rules."""
     errors: list[str] = []
-    required_top = {"id", "brief", "asset_type", "candidate_a", "candidate_b", "gold", "source_note"}
+    required_top = {
+        "id",
+        "brief",
+        "asset_type",
+        "candidate_a",
+        "candidate_b",
+        "gold",
+        "source_note",
+    }
     missing = required_top - set(data.keys())
     if missing:
         errors.append(f"{source}: missing required fields {sorted(missing)}")
@@ -88,21 +103,37 @@ def validate_fixture(data: dict[str, Any], source: str = "<memory>") -> list[str
         if not isinstance(cand, dict):
             errors.append(f"{source}.{side}: must be an object")
             continue
-        req_cand = {"description", "colors", "min_size_px", "versions", "concept_sentence"}
+        req_cand = {
+            "description",
+            "colors",
+            "min_size_px",
+            "versions",
+            "concept_sentence",
+        }
         c_missing = req_cand - set(cand.keys())
         if c_missing:
             errors.append(f"{source}.{side}: missing fields {sorted(c_missing)}")
         for bad_key in set(cand.keys()) & FORBIDDEN_SCORE_KEYS:
             errors.append(f"{source}.{side}: forbidden score field {bad_key!r}")
-        if not isinstance(cand.get("description"), str) or not cand["description"].strip():
+        if (
+            not isinstance(cand.get("description"), str)
+            or not cand["description"].strip()
+        ):
             errors.append(f"{source}.{side}.description: must be non-empty string")
-        if not isinstance(cand.get("concept_sentence"), str) or not cand["concept_sentence"].strip():
+        if (
+            not isinstance(cand.get("concept_sentence"), str)
+            or not cand["concept_sentence"].strip()
+        ):
             errors.append(f"{source}.{side}.concept_sentence: must be non-empty string")
         colors = cand.get("colors")
-        if not isinstance(colors, list) or not colors or not all(
-            isinstance(c, str) and HEX_COLOR_RE.match(c) for c in colors
+        if (
+            not isinstance(colors, list)
+            or not colors
+            or not all(isinstance(c, str) and HEX_COLOR_RE.match(c) for c in colors)
         ):
-            errors.append(f"{source}.{side}.colors: must be non-empty list of #RRGGBB strings")
+            errors.append(
+                f"{source}.{side}.colors: must be non-empty list of #RRGGBB strings"
+            )
         min_px = cand.get("min_size_px")
         if isinstance(min_px, bool) or not isinstance(min_px, int) or min_px < 1:
             errors.append(f"{source}.{side}.min_size_px: must be positive integer")
@@ -121,7 +152,9 @@ def validate_fixture(data: dict[str, Any], source: str = "<memory>") -> list[str
             errors.append(f"{source}.gold: must be an object or null")
         elif not is_gold_empty(data):
             if gold.get("verdict") not in VALID_VERDICTS:
-                errors.append(f"{source}.gold.verdict: invalid verdict {gold.get('verdict')!r}")
+                errors.append(
+                    f"{source}.gold.verdict: invalid verdict {gold.get('verdict')!r}"
+                )
             axes = gold.get("decisive_axes")
             if (
                 not isinstance(axes, list)
@@ -175,7 +208,9 @@ def load_results(results_path: Path) -> dict[str, dict[str, Any]]:
     if not results_path.exists():
         raise FileNotFoundError(f"Results path not found: {results_path}")
 
-    files = sorted(results_path.glob("*.json")) if results_path.is_dir() else [results_path]
+    files = (
+        sorted(results_path.glob("*.json")) if results_path.is_dir() else [results_path]
+    )
     results: dict[str, dict[str, Any]] = {}
 
     for path in files:
@@ -185,7 +220,11 @@ def load_results(results_path: Path) -> dict[str, dict[str, Any]]:
             fid = record.get("fixture_id") or record.get("id")
             if not fid:
                 continue
-            if "output" in record and isinstance(record["output"], dict) and "verdict" not in record:
+            if (
+                "output" in record
+                and isinstance(record["output"], dict)
+                and "verdict" not in record
+            ):
                 merged = dict(record["output"])
                 merged["id"] = fid
                 results[str(fid)] = merged
@@ -201,7 +240,9 @@ def expected_axes_for(fixture: dict[str, Any]) -> tuple[str, ...]:
 
 def extract_axis_verdicts(result: dict[str, Any]) -> dict[str, str]:
     """Normalize axis verdict mapping from dict or design_critique_graph list."""
-    raw = result.get("axis_verdicts") or result.get("axes") or result.get("axis_results")
+    raw = (
+        result.get("axis_verdicts") or result.get("axes") or result.get("axis_results")
+    )
     if isinstance(raw, dict):
         normalized: dict[str, str] = {}
         for axis, val in raw.items():
@@ -240,7 +281,9 @@ def is_swap_reversed(result: dict[str, Any]) -> bool | None:
         swap_val = result["swap"]
         if isinstance(swap_val, bool):
             return swap_val
-        verdict = str(result.get("forward_verdict") or result.get("verdict") or "").upper()
+        verdict = str(
+            result.get("forward_verdict") or result.get("verdict") or ""
+        ).upper()
         if isinstance(swap_val, str):
             swap_verdict = swap_val.upper()
             if verdict in FLIP_MAP and swap_verdict in VALID_VERDICTS:
@@ -312,10 +355,30 @@ def compute_metrics(
     swap_pct, swap_frac = fmt_rate(swap_num, swap_den)
     abstain_pct, abstain_frac = fmt_rate(abstain_num, total)
 
+    # gold 분포 편향을 드러내는 기준선. 가장 흔한 gold 판정을 항상 찍어도
+    # 이 비율만큼은 맞으므로, human_agreement는 이 값과 비교해야 의미가 있다.
+    gold_counts: dict[str, int] = {}
+    for fid in labeled_ids:
+        gold = str(fixtures[fid]["gold"]["verdict"]).upper()
+        gold_counts[gold] = gold_counts.get(gold, 0) + 1
+    baseline_num = max(gold_counts.values()) if gold_counts else 0
+    baseline_pct, baseline_frac = fmt_rate(baseline_num, total)
+
     rows = [
         ("human_agreement", agree_pct, agree_frac, "gold.verdict == graph.verdict"),
+        (
+            "baseline_agreement",
+            baseline_pct,
+            baseline_frac,
+            "most common gold verdict always (chance baseline)",
+        ),
         ("halo_rate", halo_pct, halo_frac, "all 7 axes identical (A or B)"),
-        ("swap_reversal_rate", swap_pct, swap_frac, "inconsistent flip under A<->B swap"),
+        (
+            "swap_reversal_rate",
+            swap_pct,
+            swap_frac,
+            "inconsistent flip under A<->B swap",
+        ),
         ("abstain_rate", abstain_pct, abstain_frac, "NEEDS_HUMAN or TIE"),
     ]
     return rows, total, skipped_count

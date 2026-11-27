@@ -17,7 +17,7 @@
       "inverse",
       "favicon"
     ],
-    "concept_sentence": "한 방울의 수분이 잎맥을 따라 순환하는 선형 곡선으로 지속 가능한 회복을 표현한다."
+    "concept_sentence": "우주적 에너지의 파동과 미래 도시의 속도를 추상적 미학으로 기념한다."
   },
   "candidate_b": {
     "description": "둥근 모서리 정사각형 프레임 안에 2.5px 균일 스트로크의 기하학적 나뭇잎·물방울 결합 심볼이 배치되고, 우측에 자간 +20의 휴머니스트 산세리프 워드마크가 수평 정렬된 로고.",
@@ -34,13 +34,13 @@
       "inverse",
       "favicon"
     ],
-    "concept_sentence": "우주적 에너지의 파동과 미래 도시의 속도를 추상적 미학으로 기념한다."
+    "concept_sentence": "한 방울의 수분이 잎맥을 따라 순환하는 선형 곡선으로 지속 가능한 회복을 표현한다."
   },
   "gold": {
-    "verdict": "A",
+    "verdict": "B",
     "decisive_axes": [
       "concept_logic"
     ]
   },
-  "source_note": "controlled: concept_sentence만 조형·브리프와 무관한 문장으로 치환해 concept_logic 단일 축 검증"
+  "source_note": "controlled: concept_sentence만 조형·브리프와 무관한 문장으로 치환해 concept_logic 단일 축 검증 (슬롯 교체: 우세 후보가 B 자리에 있다)"
 }
