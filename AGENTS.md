@@ -16,6 +16,7 @@ Discord 세션에서 그래프를 실행하려면 `scripts/graph_cli.py`를 쓴�
 | `copywriting_craft` | 카피 3안 생성 | `{"scene_id":"Act 1","raw_draft":"초안","context":"맥락"}` |
 | `editorial_verification` | 글 4대 검증 | `{"title":"제목","content":"본문"}` |
 | `visual_consistency` | 시각 일관성 검증 | `{"project_name":"프로젝트","vectors":[...],"motions":[...],"imagery":[...]}` |
+| `design_critique` | 디자인 A/B 4축 판정 (점수 없음, 교환 재검) | `{"brief":"...","asset_type":"logo","candidate_a":{"id":"A","image":"/path/a.png"},"candidate_b":{"id":"B","image":"/path/b.png"}}` |
 | `knowledge_harvester` | 공공 데이터 수집 | `{"query":"Bauhaus","category":"design"}` |
 | `source_verification` | SearXNG + LLM 신뢰도 심사 | `{"status":"init"}` |
 | `video_ops` | 모션 + 컷편집 | `{"brief":"브리프","aspect_ratio":"16:9"}` |
