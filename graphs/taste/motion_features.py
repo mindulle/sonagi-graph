@@ -2,8 +2,8 @@
 
 같은 파일을 두 번 넣으면 항상 같은 숫자가 나온다. 머신러닝 라이브러리는 쓰지
 않고 **Pillow + 표준 라이브러리**만 쓴다. `ffmpeg`/`ffprobe`가 설치되어 있으면
-영상(mp4/webm 등)의 프레임·오디오 추출에 활용하고, 없으면 해당 키를 `None`으로
-둔 채 예외를 던지지 않는다.
+`graphs.core.exec`를 통해 영상(mp4/webm 등)의 프레임·오디오 추출에 활용하고,
+없으면 해당 키를 `None`으로 둔 채 예외를 던지지 않는다.
 
 값은 "심사 점수"가 아니라 A/B 비교용 눈금이다 (GRAPH-52).
 
@@ -31,7 +31,6 @@ from __future__ import annotations
 import math
 import shutil
 import struct
-import subprocess
 import tempfile
 import wave
 from collections import Counter
@@ -39,6 +38,8 @@ from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageChops, ImageStat
+
+from graphs.core import exec as core_exec
 
 #: 분석 시 긴 변을 이 크기로 줄인다.
 #: 103% 오버슈트 등 미세한 크기 변화(약 3%)가 양자화에 묻히지 않도록 256px를 사용한다.
@@ -127,7 +128,7 @@ def safe_extract_features(path: str | Path) -> dict[str, Any]:
     """모션 특징 추출 실패 시 예외 대신 빈 dict를 반환한다."""
     try:
         return extract_motion_features(path)
-    except (MotionFeatureError, OSError, ValueError, TypeError, subprocess.SubprocessError):
+    except (MotionFeatureError, OSError, ValueError, TypeError):
         return {}
 
 
@@ -154,7 +155,7 @@ def _probe_video_fps(video_path: Path) -> float:
     if not ffprobe:
         return DEFAULT_FPS
     try:
-        proc = subprocess.run(
+        proc = core_exec.run(
             [
                 ffprobe,
                 "-v",
@@ -167,8 +168,6 @@ def _probe_video_fps(video_path: Path) -> float:
                 "default=noprint_wrappers=1:nokey=1",
                 str(video_path),
             ],
-            capture_output=True,
-            text=True,
             timeout=15,
             check=False,
         )
@@ -182,7 +181,7 @@ def _probe_video_fps(video_path: Path) -> float:
             val = float(raw)
             if val > 0:
                 return val
-    except (OSError, ValueError, subprocess.SubprocessError):
+    except (OSError, ValueError):
         pass
     return DEFAULT_FPS
 
@@ -198,7 +197,7 @@ def _extract_from_video(video_path: Path) -> dict[str, Any]:
         tmp = Path(tmpdir)
         frame_pattern = tmp / "frame_%06d.png"
         try:
-            subprocess.run(
+            core_exec.run(
                 [
                     ffmpeg,
                     "-v",
@@ -209,11 +208,10 @@ def _extract_from_video(video_path: Path) -> dict[str, Any]:
                     f"scale='min({ANALYSIS_MAX_DIM},iw)':-2",
                     str(frame_pattern),
                 ],
-                capture_output=True,
                 timeout=60,
                 check=False,
             )
-        except (OSError, subprocess.SubprocessError):
+        except OSError:
             return _empty_result("video")
 
         frame_paths = sorted(tmp.glob("frame_*.png"), key=lambda p: p.name)
@@ -222,7 +220,7 @@ def _extract_from_video(video_path: Path) -> dict[str, Any]:
 
         audio_path: Path | None = tmp / "audio.wav"
         try:
-            proc_audio = subprocess.run(
+            proc_audio = core_exec.run(
                 [
                     ffmpeg,
                     "-v",
@@ -238,17 +236,16 @@ def _extract_from_video(video_path: Path) -> dict[str, Any]:
                     "wav",
                     str(audio_path),
                 ],
-                capture_output=True,
                 timeout=30,
                 check=False,
             )
             if (
-                proc_audio.returncode != 0
+                not proc_audio.ok
                 or not audio_path.exists()
                 or audio_path.stat().st_size <= 44
             ):
                 audio_path = None
-        except (OSError, subprocess.SubprocessError):
+        except OSError:
             audio_path = None
 
         frames = [_load_rgb_frame(p) for p in frame_paths]
