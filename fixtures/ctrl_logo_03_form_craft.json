@@ -1,0 +1,46 @@
+{
+  "id": "ctrl_logo_03_form_craft",
+  "brief": "친환경 저자극 스킨케어 브랜드. 타깃: 20~40대 민감성 피부 고객. 핵심 키워드: 순수, 진정, 자연 유래.",
+  "asset_type": "logo",
+  "candidate_a": {
+    "description": "둥근 모서리 정사각형 프레임 안에 2.5px 균일 스트로크의 기하학적 나뭇잎·물방울 결합 심볼이 배치되고, 우측에 자간 +20의 휴머니스트 산세리프 워드마크가 수평 정렬된 로고.",
+    "colors": [
+      "#2D5A27",
+      "#F4EFE6"
+    ],
+    "min_size_px": 16,
+    "versions": [
+      "horizontal",
+      "stacked",
+      "symbol_only",
+      "monochrome",
+      "inverse",
+      "favicon"
+    ],
+    "concept_sentence": "한 방울의 수분이 잎맥을 따라 순환하는 선형 곡선으로 지속 가능한 회복을 표현한다."
+  },
+  "candidate_b": {
+    "description": "둥근 모서리 정사각형 프레임 안에 나뭇잎·물방울 결합 심볼이 배치되었으나, 좌우 곡률 반경이 서로 다르고 스트로크 두께가 1px~4px로 불규칙하게 꺾이며 심볼과 워드마크의 수직 중심선이 3px 어긋난 로고.",
+    "colors": [
+      "#2D5A27",
+      "#F4EFE6"
+    ],
+    "min_size_px": 16,
+    "versions": [
+      "horizontal",
+      "stacked",
+      "symbol_only",
+      "monochrome",
+      "inverse",
+      "favicon"
+    ],
+    "concept_sentence": "한 방울의 수분이 잎맥을 따라 순환하는 선형 곡선으로 지속 가능한 회복을 표현한다."
+  },
+  "gold": {
+    "verdict": "A",
+    "decisive_axes": [
+      "form_craft"
+    ]
+  },
+  "source_note": "controlled: 기하 곡률 연속성·선 두께 균일성·정렬 정밀도만 열화해 form_craft 단일 축 검증"
+}

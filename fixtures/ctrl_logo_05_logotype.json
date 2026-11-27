@@ -1,0 +1,46 @@
+{
+  "id": "ctrl_logo_05_logotype",
+  "brief": "친환경 저자극 스킨케어 브랜드. 타깃: 20~40대 민감성 피부 고객. 핵심 키워드: 순수, 진정, 자연 유래.",
+  "asset_type": "logo",
+  "candidate_a": {
+    "description": "둥근 모서리 정사각형 프레임 안에 2.5px 균일 스트로크의 기하학적 나뭇잎·물방울 결합 심볼이 배치되고, 우측에 자간 +20의 휴머니스트 산세리프 워드마크가 수평 정렬된 로고.",
+    "colors": [
+      "#2D5A27",
+      "#F4EFE6"
+    ],
+    "min_size_px": 16,
+    "versions": [
+      "horizontal",
+      "stacked",
+      "symbol_only",
+      "monochrome",
+      "inverse",
+      "favicon"
+    ],
+    "concept_sentence": "한 방울의 수분이 잎맥을 따라 순환하는 선형 곡선으로 지속 가능한 회복을 표현한다."
+  },
+  "candidate_b": {
+    "description": "둥근 모서리 정사각형 프레임 안에 2.5px 균일 스트로크의 나뭇잎·물방울 결합 심볼이 배치되었으나, 우측 워드마크의 'r-n'과 'a-v' 커닝이 충돌해 글자가 붙어 보이고 심볼 대비 지나치게 가는 헤어라인 세리프 서체를 사용해 무게 중심이 무너진 로고.",
+    "colors": [
+      "#2D5A27",
+      "#F4EFE6"
+    ],
+    "min_size_px": 16,
+    "versions": [
+      "horizontal",
+      "stacked",
+      "symbol_only",
+      "monochrome",
+      "inverse",
+      "favicon"
+    ],
+    "concept_sentence": "한 방울의 수분이 잎맥을 따라 순환하는 선형 곡선으로 지속 가능한 회복을 표현한다."
+  },
+  "gold": {
+    "verdict": "A",
+    "decisive_axes": [
+      "logotype"
+    ]
+  },
+  "source_note": "controlled: 심볼·색상·콘셉트는 고정하고 워드마크 커닝·웨이트 조화만 열화해 logotype 단일 축 검증"
+}

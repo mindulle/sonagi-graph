@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sonagi.space/schemas/design-critique-fixture.v1.json",
+  "title": "DesignCritiqueCalibrationFixture",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "brief",
+    "asset_type",
+    "candidate_a",
+    "candidate_b",
+    "gold",
+    "source_note"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "brief": {
+      "type": "string",
+      "minLength": 1
+    },
+    "asset_type": {
+      "type": "string",
+      "enum": [
+        "logo"
+      ]
+    },
+    "candidate_a": {
+      "$ref": "#/$defs/candidate"
+    },
+    "candidate_b": {
+      "$ref": "#/$defs/candidate"
+    },
+    "gold": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "maxProperties": 0
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "verdict",
+            "decisive_axes"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "A",
+                "B",
+                "TIE",
+                "BOTH_REJECT",
+                "NEEDS_HUMAN"
+              ]
+            },
+            "decisive_axes": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "brief_fit",
+                  "concept_logic",
+                  "form_craft",
+                  "distinctiveness",
+                  "logotype",
+                  "small_scale_legibility",
+                  "system_extension"
+                ]
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          }
+        }
+      ]
+    },
+    "source_note": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "description",
+        "colors",
+        "min_size_px",
+        "versions",
+        "concept_sentence"
+      ],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "colors": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^#[0-9A-Fa-f]{6}$"
+          },
+          "minItems": 1
+        },
+        "min_size_px": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "versions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "horizontal",
+              "stacked",
+              "symbol_only",
+              "monochrome",
+              "inverse",
+              "favicon"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "concept_sentence": {
+          "type": "string",
+          "minLength": 1
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "svg",
+            "ai",
+            "eps",
+            "pdf",
+            "png"
+          ]
+        }
+      }
+    }
+  }
+}

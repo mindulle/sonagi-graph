@@ -574,3 +574,11 @@ def capture_vault_write(monkeypatch, tmp_path):
     monkeypatch.setattr(builtins, "open", fake_open)
     monkeypatch.setattr(os, "makedirs", fake_makedirs)
     return captured
+
+
+@pytest.fixture(autouse=True)
+def isolate_taste_dir(monkeypatch, tmp_path_factory):
+    """테스트 중 taste 프로필·원장 경로를 별도 임시 디렉터리로 격리한다."""
+    taste_dir = tmp_path_factory.mktemp("sonagi-taste")
+    monkeypatch.setenv("SONAGI_TASTE_DIR", str(taste_dir))
+    return taste_dir

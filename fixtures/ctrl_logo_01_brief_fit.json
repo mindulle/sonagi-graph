@@ -1,0 +1,46 @@
+{
+  "id": "ctrl_logo_01_brief_fit",
+  "brief": "친환경 저자극 스킨케어 브랜드. 타깃: 20~40대 민감성 피부 고객. 핵심 키워드: 순수, 진정, 자연 유래. 제약: 차분하고 자극 없는 톤 유지.",
+  "asset_type": "logo",
+  "candidate_a": {
+    "description": "둥근 모서리 정사각형 프레임 안에 2.5px 균일 스트로크의 기하학적 나뭇잎·물방울 결합 심볼이 배치되고, 우측에 자간 +20의 휴머니스트 산세리프 워드마크가 수평 정렬된 로고.",
+    "colors": [
+      "#2D5A27",
+      "#F4EFE6"
+    ],
+    "min_size_px": 16,
+    "versions": [
+      "horizontal",
+      "stacked",
+      "symbol_only",
+      "monochrome",
+      "inverse",
+      "favicon"
+    ],
+    "concept_sentence": "한 방울의 수분이 잎맥을 따라 순환하는 선형 곡선으로 지속 가능한 회복을 표현한다."
+  },
+  "candidate_b": {
+    "description": "둥근 모서리 정사각형 프레임 안에 2.5px 균일 스트로크의 기하학적 나뭇잎·물방울 결합 심볼이 배치되고, 우측에 자간 +20의 휴머니스트 산세리프 워드마크가 수평 정렬된 로고.",
+    "colors": [
+      "#FF007F",
+      "#00FF66"
+    ],
+    "min_size_px": 16,
+    "versions": [
+      "horizontal",
+      "stacked",
+      "symbol_only",
+      "monochrome",
+      "inverse",
+      "favicon"
+    ],
+    "concept_sentence": "한 방울의 수분이 잎맥을 따라 순환하는 선형 곡선으로 지속 가능한 회복을 표현한다."
+  },
+  "gold": {
+    "verdict": "A",
+    "decisive_axes": [
+      "brief_fit"
+    ]
+  },
+  "source_note": "controlled: colors만 고채도 네온으로 변경해 brief_fit 단일 축 민감도 검증"
+}
