@@ -1,0 +1,41 @@
+{
+  "id": "ctrl_logo_07_system_extension",
+  "brief": "친환경 저자극 스킨케어 브랜드. 타깃: 20~40대 민감성 피부 고객. 핵심 키워드: 순수, 진정. 제약: 패키지 단색 인쇄·웹 파비콘·다크모드 반전 대응 필요.",
+  "asset_type": "logo",
+  "candidate_a": {
+    "description": "둥근 모서리 정사각형 프레임 안에 2.5px 균일 스트로크의 기하학적 나뭇잎·물방울 결합 심볼이 배치되고, 우측에 자간 +20의 휴머니스트 산세리프 워드마크가 수평 정렬된 로고.",
+    "colors": [
+      "#2D5A27",
+      "#F4EFE6"
+    ],
+    "min_size_px": 16,
+    "versions": [
+      "horizontal",
+      "stacked",
+      "symbol_only",
+      "monochrome",
+      "inverse",
+      "favicon"
+    ],
+    "concept_sentence": "한 방울의 수분이 잎맥을 따라 순환하는 선형 곡선으로 지속 가능한 회복을 표현한다."
+  },
+  "candidate_b": {
+    "description": "둥근 모서리 정사각형 프레임 안에 2.5px 균일 스트로크의 기하학적 나뭇잎·물방울 결합 심볼이 배치되고, 우측에 자간 +20의 휴머니스트 산세리프 워드마크가 수평 정렬된 로고. 단, 가로형 풀컬러 단일 버전만 제공되며 단색·반전·심볼 단독 변형이 없음.",
+    "colors": [
+      "#2D5A27",
+      "#F4EFE6"
+    ],
+    "min_size_px": 16,
+    "versions": [
+      "horizontal"
+    ],
+    "concept_sentence": "한 방울의 수분이 잎맥을 따라 순환하는 선형 곡선으로 지속 가능한 회복을 표현한다."
+  },
+  "gold": {
+    "verdict": "A",
+    "decisive_axes": [
+      "system_extension"
+    ]
+  },
+  "source_note": "controlled: versions 배열만 단일 가로형으로 축소해 system_extension 단일 축 검증"
+}

@@ -1,0 +1,46 @@
+{
+  "id": "ctrl_logo_04_distinctiveness",
+  "brief": "스페셜티 로스터리 카페 브랜드. 타깃: 20~30대 스페셜티 커피 애호가. 핵심 키워드: 로스팅, 원두의 결, 고유한 향.",
+  "asset_type": "logo",
+  "candidate_a": {
+    "description": "원두의 중앙 갈라짐과 회전하는 로스터 드럼의 단면을 단일 네거티브 스페이스 컷으로 결합한 2.5px 스트로크 심볼과 산세리프 워드마크 조합.",
+    "colors": [
+      "#3B2314",
+      "#F6F1EA"
+    ],
+    "min_size_px": 16,
+    "versions": [
+      "horizontal",
+      "stacked",
+      "symbol_only",
+      "monochrome",
+      "inverse",
+      "favicon"
+    ],
+    "concept_sentence": "로스팅 드럼의 회전 궤적과 원두의 결을 하나의 네거티브 스페이스로 통합한다."
+  },
+  "candidate_b": {
+    "description": "원형 프레임 안에 위쪽으로 김이 세 줄기 피어오르는 일반적인 머그컵 실루엣을 배치한 2.5px 스트로크 심볼과 동일한 산세리프 워드마크 조합.",
+    "colors": [
+      "#3B2314",
+      "#F6F1EA"
+    ],
+    "min_size_px": 16,
+    "versions": [
+      "horizontal",
+      "stacked",
+      "symbol_only",
+      "monochrome",
+      "inverse",
+      "favicon"
+    ],
+    "concept_sentence": "김이 오르는 커피잔 실루엣으로 따뜻한 카페의 인상을 전달한다."
+  },
+  "gold": {
+    "verdict": "A",
+    "decisive_axes": [
+      "distinctiveness"
+    ]
+  },
+  "source_note": "controlled: 업종 클리셰(김 오르는 머그컵) 대비 고유 네거티브 스페이스 모티프로 distinctiveness 단일 축 검증"
+}
