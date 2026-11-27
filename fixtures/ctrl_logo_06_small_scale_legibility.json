@@ -1,0 +1,46 @@
+{
+  "id": "ctrl_logo_06_small_scale_legibility",
+  "brief": "모바일 금융 송금 앱. 타깃: 20~30대 스마트폰 주 사용층. 핵심 키워드: 즉각성, 신뢰. 제약: 16px 앱 알림 아이콘·파비콘에서 식별 가능할 것.",
+  "asset_type": "logo",
+  "candidate_a": {
+    "description": "둥근 모서리 정사각형 내부에 2.5px 균일 스트로크의 단일 화살표 아크가 중앙을 가로지르며 카운터 공간이 전체 폭의 40% 이상 확보된 심볼과 산세리프 워드마크.",
+    "colors": [
+      "#0F4C81",
+      "#FFFFFF"
+    ],
+    "min_size_px": 16,
+    "versions": [
+      "horizontal",
+      "stacked",
+      "symbol_only",
+      "monochrome",
+      "inverse",
+      "favicon"
+    ],
+    "concept_sentence": "끊김 없는 단일 궤적으로 지연 없는 송금의 즉각성을 표현한다."
+  },
+  "candidate_b": {
+    "description": "둥근 모서리 정사각형 내부에 0.75px 세선 5겹이 겹친 동심원 화살표 아크와 미세 도트 패턴이 들어가 24px 이하 축소 시 내부 공백이 닫혀 뭉개지는 심볼과 동일한 산세리프 워드마크.",
+    "colors": [
+      "#0F4C81",
+      "#FFFFFF"
+    ],
+    "min_size_px": 48,
+    "versions": [
+      "horizontal",
+      "stacked",
+      "symbol_only",
+      "monochrome",
+      "inverse",
+      "favicon"
+    ],
+    "concept_sentence": "끊김 없는 단일 궤적으로 지연 없는 송금의 즉각성을 표현한다."
+  },
+  "gold": {
+    "verdict": "A",
+    "decisive_axes": [
+      "small_scale_legibility"
+    ]
+  },
+  "source_note": "controlled: 세선 중첩 및 min_size_px(16 vs 48)만 변형해 small_scale_legibility 단일 축 검증"
+}

@@ -1,0 +1,40 @@
+{
+  "id": "ctrl_logo_08_both_reject",
+  "brief": "친환경 로컬 베이커리. 핵심 키워드: 담백함, 수제, 친환경. 제약: 크라프트 봉투 1도 스탬프 인쇄 필수, 16px 파비콘 식별 필수.",
+  "asset_type": "logo",
+  "candidate_a": {
+    "description": "4색 다중 메시 그라데이션과 반투명 블러가 필수적으로 적용되어 1도 스탬프 단색 변환 시 외곽선과 형태가 소실되는 밀 이삭 심볼.",
+    "colors": [
+      "#FF9A9E",
+      "#FAD0C4",
+      "#A18CD1",
+      "#FBC2EB"
+    ],
+    "min_size_px": 24,
+    "versions": [
+      "horizontal"
+    ],
+    "concept_sentence": "부드러운 빛의 그라데이션으로 갓 구운 빵의 온기를 표현한다."
+  },
+  "candidate_b": {
+    "description": "0.5px 극세선 해칭 20줄로 밀 이삭 알갱이를 일일이 묘사해 64px 미만 축소 시 검은 덩어리로 뭉개지는 복잡 세밀화 심볼.",
+    "colors": [
+      "#4A3520",
+      "#FFFFFF"
+    ],
+    "min_size_px": 64,
+    "versions": [
+      "horizontal",
+      "monochrome"
+    ],
+    "concept_sentence": "장인의 섬세한 손길을 세밀한 선 묘사로 담아낸다."
+  },
+  "gold": {
+    "verdict": "BOTH_REJECT",
+    "decisive_axes": [
+      "brief_fit",
+      "small_scale_legibility"
+    ]
+  },
+  "source_note": "controlled: A는 1도 인쇄 제약 위반, B는 16px 파비콘 제약 위반으로 BOTH_REJECT 판정 능력 검증"
+}
