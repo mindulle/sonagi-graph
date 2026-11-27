@@ -6,7 +6,8 @@
 3. 자산별 축 팩(logo/landing/print/미등록)과 JSON 룰셋이 분리 로드된다.
 4. 재료(Class101 인덱스)가 없거나 비어 있어도 최소 입력으로 끝까지 돈다.
 5. 축 간 판정이 갈리면 NEEDS_HUMAN으로 떨어진다 (axis_divergence).
-6. A/B 자리를 바꿔 재판정한 결론이 뒤집히면 NEEDS_HUMAN으로 떨어진다 (swap_reversal).
+6. A/B 자리를 바꿔 재판정한 결론이 뒤집히면(축 다수가 흔들리면) NEEDS_HUMAN으로 떨어진다 (swap_flip_threshold).
+   축 소수(전체의 1/3 이하)만 흔들리면 나머지 축의 다수 판정을 유지한다 (majority_with_axis_flips).
 7. 모델·프롬프트·경로 설정을 교체할 수 있다.
 8. 규칙 위반 후보를 게이트로 떨어뜨리지 않고 판정 층까지 전달한다.
 """
@@ -185,7 +186,7 @@ def test_axis_divergence_triggers_needs_human(install_stub):
 
 
 def test_ab_swap_reversal_triggers_needs_human(install_stub):
-    """A/B 자리를 바꿨을 때 결론이 뒤집히면(위치 편향) NEEDS_HUMAN이 된다."""
+    """모든 축이 위치 편향으로 뒤집히면(허용치 초과) NEEDS_HUMAN이 된다."""
 
     def resolver(_axis_id, _swapped, _pv):
         # 자리를 바꿔도 무조건 첫 번째 슬롯("A")을 고르는 위치 편향 모델
@@ -205,8 +206,75 @@ def test_ab_swap_reversal_triggers_needs_human(install_stub):
     assert out["forward_verdict"] == "A"
     assert out["swapped_verdict_mapped"] == "B"
     assert out["swap_consistent"] is False
+    assert len(out["axis_swap_flips"]) > out["allowed_axis_flips"]
     assert out["verdict"] == "NEEDS_HUMAN"
-    assert out["verdict_reason"] == "swap_reversal"
+    assert out["verdict_reason"] == "swap_flip_threshold"
+
+
+def test_minority_axis_flip_keeps_pair_verdict(install_stub):
+    """7축 중 1축만 흔들리면 페어 판정은 유지하고, 흔들린 축만 기권으로 남긴다."""
+
+    def resolver(axis_id, swapped, _pv):
+        # logotype 축만 자리 순서에 따라 답이 바뀐다(정방향 A, 역방향 A -> 원래 B)
+        if axis_id == "logotype":
+            return "A", []
+        return ("B" if swapped else "A"), []
+
+    install_stub(resolver)
+    result = mod.graph.invoke(
+        {
+            "brief": "로고 리뉴얼",
+            "asset_type": "logo",
+            "candidate_a": {"id": "A"},
+            "candidate_b": {"id": "B"},
+        }
+    )
+
+    out = result["output"]
+    assert out["axis_swap_flips"] == ["logotype"]
+    assert out["allowed_axis_flips"] == mod.allowed_axis_flips(7)
+    assert out["forward_verdict"] == "A"
+    assert out["verdict"] == "A"
+    assert out["verdict_reason"] == "majority_with_axis_flips"
+    flipped = [ax for ax in out["axes"] if ax["axis_id"] == "logotype"][0]
+    assert flipped["verdict"] == "NEEDS_HUMAN"
+
+
+def test_axis_flip_threshold_triggers_needs_human(install_stub):
+    """허용치(7축 중 2개)를 넘는 3개 축이 흔들리면 사람에게 넘긴다."""
+
+    flaky = {"logotype", "distinctiveness", "system_extension"}
+
+    def resolver(axis_id, swapped, _pv):
+        if axis_id in flaky:
+            return "A", []
+        return ("B" if swapped else "A"), []
+
+    install_stub(resolver)
+    result = mod.graph.invoke(
+        {
+            "brief": "로고 리뉴얼",
+            "asset_type": "logo",
+            "candidate_a": {"id": "A"},
+            "candidate_b": {"id": "B"},
+        }
+    )
+
+    out = result["output"]
+    assert sorted(out["axis_swap_flips"]) == sorted(flaky)
+    assert out["allowed_axis_flips"] == 2
+    assert out["verdict"] == "NEEDS_HUMAN"
+    assert out["verdict_reason"] == "swap_flip_threshold"
+
+
+def test_aggregate_axis_verdicts_treats_abstain_as_minority():
+    """기권 축은 집계에서 빠지고, 남은 축이 한 방향이면 그 판정이 유지된다."""
+    assert mod.aggregate_axis_verdicts(["A", "A", "NEEDS_HUMAN"]) == "A"
+    assert mod.aggregate_axis_verdicts(["NEEDS_HUMAN"]) == "NEEDS_HUMAN"
+    assert mod.aggregate_axis_verdicts(["A", "B"]) == "NEEDS_HUMAN"
+    assert mod.aggregate_axis_verdicts(["TIE", "TIE"]) == "TIE"
+    assert mod.allowed_axis_flips(7) == 2
+    assert mod.allowed_axis_flips(4) == 1
 
 
 def test_asset_packs_and_rules_without_gate_drop(install_stub):
@@ -531,13 +599,13 @@ def test_false_positive_tuning_graph_50_four_cases():
             # 4) ui.icon.hardcoded: 데이터 상수 SVG 문자열 제외, JSX UI 아이콘 유지
             "src/AssetDrawer.tsx": (
                 "const SAMPLES = [\n"
-                "  { label: 'star', svg: '<svg viewBox=\"0 0 24 24\" fill=\"#f59e0b\"><path d=\"M0 0\"/></svg>' },\n"
+                '  { label: \'star\', svg: \'<svg viewBox="0 0 24 24" fill="#f59e0b"><path d="M0 0"/></svg>\' },\n'
                 "];\n"
-                "export const ChromeIcon = () => <svg viewBox=\"0 0 24 24\" fill=\"#ef4444\"><path d=\"M0 0\"/></svg>;\n"
+                'export const ChromeIcon = () => <svg viewBox="0 0 24 24" fill="#ef4444"><path d="M0 0"/></svg>;\n'
             ),
             # 정상 동작 유지: transition-all
             "components/ReadingProgress.tsx": (
-                "export const Bar = () => <div className=\"h-1 transition-all duration-150\" />;"
+                'export const Bar = () => <div className="h-1 transition-all duration-150" />;'
             ),
         },
     }
@@ -549,17 +617,21 @@ def test_false_positive_tuning_graph_50_four_cases():
 
     # 1) Next.js 템플릿 자산 5종 제외, 커스텀 SVG는 탐지
     for tmpl in ("file.svg", "globe.svg", "next.svg", "vercel.svg", "window.svg"):
-        assert not any(f"public/{tmpl}" in loc for loc in locs), f"{tmpl} should be excluded"
+        assert not any(f"public/{tmpl}" in loc for loc in locs), (
+            f"{tmpl} should be excluded"
+        )
     assert any("public/custom-badge.svg" in loc for loc in locs)
 
     # 2) 인라인 letterSpacing 면제, 무자간(WiredCopyNoteShape, ZeroTracking) 탐지
     assert not any("BacklinksSection.tsx" in loc for loc in locs)
     assert any(
-        f.get("rule_id") == "type.allcaps.tracking" and "WiredCopyNoteShape.tsx" in f["location"]
+        f.get("rule_id") == "type.allcaps.tracking"
+        and "WiredCopyNoteShape.tsx" in f["location"]
         for f in findings
     )
     assert any(
-        f.get("rule_id") == "type.allcaps.tracking" and "ZeroTracking.tsx" in f["location"]
+        f.get("rule_id") == "type.allcaps.tracking"
+        and "ZeroTracking.tsx" in f["location"]
         for f in findings
     )
 
@@ -573,11 +645,14 @@ def test_false_positive_tuning_graph_50_four_cases():
     icon_locs = [
         f["location"] for f in findings if f.get("rule_id") == "ui.icon.hardcoded"
     ]
-    assert any(loc.endswith("src/AssetDrawer.tsx:4") for loc in icon_locs) and not any("src/AssetDrawer.tsx:2" in loc for loc in icon_locs)
+    assert any(loc.endswith("src/AssetDrawer.tsx:4") for loc in icon_locs) and not any(
+        "src/AssetDrawer.tsx:2" in loc for loc in icon_locs
+    )
 
     # 정상 동작 유지: ReadingProgress.tsx transition-all
     assert any(
-        f.get("rule_id") == "motion.transition.all" and "ReadingProgress.tsx" in f["location"]
+        f.get("rule_id") == "motion.transition.all"
+        and "ReadingProgress.tsx" in f["location"]
         for f in findings
     )
 
