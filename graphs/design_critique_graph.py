@@ -5,8 +5,9 @@
 - 자산별 보조 축은 JSON 팩 파일로 주입한다(logo, landing 등). print는 규칙 층 전용.
 - 스키마와 출력 JSON에 숫자 점수/평점 필드를 두지 않는다.
 - 최종 판정은 A | B | TIE | BOTH_REJECT | NEEDS_HUMAN.
-  - 축 간 판정이 갈리면 NEEDS_HUMAN.
-  - A/B 자리를 바꿔 재판정한 결론이 뒤집히면 NEEDS_HUMAN.
+  - NEEDS_HUMAN 축은 기권으로 보고 나머지 축으로 집계한다. 축 간 판정이 갈리면 NEEDS_HUMAN.
+  - A/B 자리를 바꿔 흔들린 축이 허용치(전체 축의 1/3 이하)를 넘으면 NEEDS_HUMAN,
+    허용치 이하면 나머지 축의 다수 판정을 유지한다(majority_with_axis_flips).
 - 규칙 층(JSON 룰셋)과 판정 층(LLM 루브릭)을 분리하며, 게이트로 후보를 떨어뜨리지 않는다.
 - 모델·프롬프트·재료 인덱스 경로·축 팩 경로·룰셋 경로는 모두 설정/환경변수로 교체 가능하다.
 - 후보 dict의 `image`/`image_path`/`image_url`/`images`는 비전 블록으로 첨부한다.
@@ -333,19 +334,30 @@ def map_swapped_choice(choice: str) -> Verdict:
     return "NEEDS_HUMAN"
 
 
+def allowed_axis_flips(axis_count: int) -> int:
+    """페어 판정을 유지할 수 있는 축 단위 스왑 불일치 허용치.
+
+    축 하나가 흔들린다고 페어 전체를 기권시키면, 7축 중 1축(14%)만 흔들려도
+    판정이 사라진다. 그래서 전체 축의 1/3까지는 다수 판정을 유지하고,
+    그를 넘으면 사람에게 넘긴다. 7축이면 2개, 4축이면 1개가 허용된다.
+    """
+    return max(1, int(axis_count) // 3)
+
+
 def aggregate_axis_verdicts(verdicts: List[str]) -> Verdict:
     """축별 판정 결과를 종합한다.
 
-    - 어느 한 축이라도 NEEDS_HUMAN이면 NEEDS_HUMAN.
-    - TIE를 제외한 유효 판정이 둘 이상으로 갈리면(예: A vs B, A vs BOTH_REJECT) NEEDS_HUMAN.
-    - 모두 TIE이면 TIE.
+    - NEEDS_HUMAN은 기권으로 보고 집계에서 제외한다(한 축 때문에 전체를 버리지 않는다).
+    - 기권을 뺀 유효 판정이 둘 이상으로 갈리면(예: A vs B, A vs BOTH_REJECT) NEEDS_HUMAN.
+    - 유효 판정이 없으면 NEEDS_HUMAN, 모두 TIE이면 TIE.
     - 단일 방향으로 모이면 그 판정(A | B | BOTH_REJECT)을 반환한다.
     """
     if not verdicts:
         return "TIE"
-    if "NEEDS_HUMAN" in verdicts:
+    decided = [v for v in verdicts if v != "NEEDS_HUMAN"]
+    if not decided:
         return "NEEDS_HUMAN"
-    non_tie = {v for v in verdicts if v != "TIE"}
+    non_tie = {v for v in decided if v != "TIE"}
     if not non_tie:
         return "TIE"
     if len(non_tie) > 1:
@@ -721,6 +733,8 @@ def synthesizer(state: DesignCritiqueState) -> Dict[str, Any]:
         forward_verdict: Verdict = verdict
         swapped_verdict_mapped: Verdict = verdict
         swap_consistent = True
+        flip_axes: List[str] = []
+        allowed_flips = 0
     else:
         forward_verdict = aggregate_axis_verdicts(
             [str(r.get("forward_winner", "NEEDS_HUMAN")) for r in axis_results]
@@ -728,19 +742,23 @@ def synthesizer(state: DesignCritiqueState) -> Dict[str, Any]:
         swapped_verdict_mapped = aggregate_axis_verdicts(
             [str(r.get("swapped_winner_mapped", "NEEDS_HUMAN")) for r in axis_results]
         )
-        all_axes_swap_consistent = all(
-            bool(r.get("swap_consistent", False)) for r in axis_results
-        )
-        swap_consistent = (
-            forward_verdict == swapped_verdict_mapped and all_axes_swap_consistent
-        )
+        flip_axes = [
+            str(r.get("axis_id", "unknown"))
+            for r in axis_results
+            if not bool(r.get("swap_consistent", False))
+        ]
+        allowed_flips = allowed_axis_flips(len(axis_results))
+        swap_consistent = forward_verdict == swapped_verdict_mapped
 
-        if forward_verdict == "NEEDS_HUMAN" or swapped_verdict_mapped == "NEEDS_HUMAN":
+        if forward_verdict == "NEEDS_HUMAN":
             verdict = "NEEDS_HUMAN"
             verdict_reason = "axis_divergence"
-        elif not swap_consistent:
+        elif len(flip_axes) > allowed_flips:
             verdict = "NEEDS_HUMAN"
-            verdict_reason = "swap_reversal"
+            verdict_reason = "swap_flip_threshold"
+        elif flip_axes:
+            verdict = forward_verdict
+            verdict_reason = "majority_with_axis_flips"
         else:
             verdict = forward_verdict
             verdict_reason = "consensus"
@@ -748,7 +766,9 @@ def synthesizer(state: DesignCritiqueState) -> Dict[str, Any]:
     all_findings = rule_findings + axis_findings
     summary = (
         f"verdict={verdict} ({verdict_reason}), "
-        f"axes={len(axis_results)}, findings={len(all_findings)}"
+        f"axes={len(axis_results)}, "
+        f"swap_flips={len(flip_axes)}/{allowed_flips} allowed, "
+        f"findings={len(all_findings)}"
     )
 
     output = {
@@ -759,6 +779,8 @@ def synthesizer(state: DesignCritiqueState) -> Dict[str, Any]:
         "forward_verdict": forward_verdict,
         "swapped_verdict_mapped": swapped_verdict_mapped,
         "swap_consistent": swap_consistent,
+        "axis_swap_flips": flip_axes,
+        "allowed_axis_flips": allowed_flips,
         "axes": axis_results,
         "rules": rule_results,
         "findings": all_findings,
