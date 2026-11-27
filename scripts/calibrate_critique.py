@@ -28,20 +28,18 @@ COMMON_AXES = (
 
 ASSET_PACK_AXES: dict[str, tuple[str, ...]] = {
     "logo": ("logotype", "small_scale_legibility", "system_extension"),
+    "landing": ("copy_hierarchy", "states", "cta"),
+    # print 팩은 규칙 층 전용(축 없음).
+    "print": (),
 }
 
-ALL_LOGO_AXES = set(COMMON_AXES + ASSET_PACK_AXES["logo"])
+ALL_AXES = set(COMMON_AXES).union(*ASSET_PACK_AXES.values())
 VALID_VERDICTS = {"A", "B", "TIE", "BOTH_REJECT", "NEEDS_HUMAN"}
 ABSTAIN_VERDICTS = {"NEEDS_HUMAN", "TIE"}
 DIRECTIONAL_VERDICTS = {"A", "B"}
-VALID_VERSIONS = {
-    "horizontal",
-    "stacked",
-    "symbol_only",
-    "monochrome",
-    "inverse",
-    "favicon",
-}
+# 자산 유형마다 버전 표기가 다르므로(로고 horizontal/stacked, 인쇄 단행본/스프레드 등)
+# 닫힌 목록 대신 소문자 토큰 규칙만 검사한다.
+VERSION_RE = re.compile(r"^[a-z0-9_]{2,24}$")
 HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{2,63}$")
 FORBIDDEN_SCORE_KEYS = {"score", "scores", "rating", "ratings", "points", "total_score"}
@@ -142,7 +140,9 @@ def validate_fixture(data: dict[str, Any], source: str = "<memory>") -> list[str
             not isinstance(versions, list)
             or not versions
             or len(set(versions)) != len(versions)
-            or not all(isinstance(v, str) and v in VALID_VERSIONS for v in versions)
+            or not all(
+                isinstance(v, str) and VERSION_RE.match(v) for v in versions
+            )
         ):
             errors.append(f"{source}.{side}.versions: invalid version list")
 
@@ -160,7 +160,7 @@ def validate_fixture(data: dict[str, Any], source: str = "<memory>") -> list[str
                 not isinstance(axes, list)
                 or not axes
                 or len(set(axes)) != len(axes)
-                or not all(isinstance(ax, str) and ax in ALL_LOGO_AXES for ax in axes)
+                or not all(isinstance(ax, str) and ax in ALL_AXES for ax in axes)
             ):
                 errors.append(f"{source}.gold.decisive_axes: invalid axis list")
 

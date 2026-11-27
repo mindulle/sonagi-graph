@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 
 from scripts.calibrate_critique import (
+    ASSET_PACK_AXES,
+    COMMON_AXES,
     compute_metrics,
     expected_axes_for,
     load_fixtures,
@@ -93,3 +95,60 @@ class TestCalibrateCritique(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAssetTypeWidening(unittest.TestCase):
+    """GRAPH-54: 실제 쌍은 인쇄물·랜딩일 수 있으므로 자산 유형을 넓혔다."""
+
+    def _fixture(self, asset_type: str, versions: list[str], axes: list[str]) -> dict:
+        cand = {
+            "description": "관찰 가능한 설명",
+            "colors": ["#112233"],
+            "min_size_px": 320,
+            "versions": versions,
+            "concept_sentence": "개념 문장",
+        }
+        return {
+            "id": "real_00",
+            "brief": "브리프",
+            "asset_type": asset_type,
+            "candidate_a": cand,
+            "candidate_b": dict(cand),
+            "gold": {"verdict": "A", "decisive_axes": axes},
+            "source_note": "출처",
+        }
+
+    def test_print_and_landing_pass_validation(self):
+        self.assertEqual(
+            validate_fixture(
+                self._fixture("print", ["single_page", "full_bleed"], ["brief_fit"]),
+                "print",
+            ),
+            [],
+        )
+        self.assertEqual(
+            validate_fixture(
+                self._fixture("landing", ["hero_section"], ["copy_hierarchy", "cta"]),
+                "landing",
+            ),
+            [],
+        )
+
+    def test_unknown_asset_type_and_version_still_rejected(self):
+        self.assertTrue(
+            validate_fixture(
+                self._fixture("poster", ["single_page"], ["brief_fit"]), "poster"
+            )
+        )
+        self.assertTrue(
+            validate_fixture(
+                self._fixture("print", ["Single Page"], ["brief_fit"]), "versions"
+            )
+        )
+
+    def test_landing_axes_are_expected_axes(self):
+        fixture = self._fixture("landing", ["hero_section"], ["cta"])
+        self.assertEqual(
+            expected_axes_for(fixture),
+            COMMON_AXES + ASSET_PACK_AXES["landing"],
+        )
