@@ -25,7 +25,9 @@
     "asset_type": {
       "type": "string",
       "enum": [
-        "logo"
+        "logo",
+        "landing",
+        "print"
       ]
     },
     "candidate_a": {
@@ -73,7 +75,10 @@
                   "distinctiveness",
                   "logotype",
                   "small_scale_legibility",
-                  "system_extension"
+                  "system_extension",
+                  "copy_hierarchy",
+                  "states",
+                  "cta"
                 ]
               },
               "minItems": 1,
@@ -120,14 +125,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": [
-              "horizontal",
-              "stacked",
-              "symbol_only",
-              "monochrome",
-              "inverse",
-              "favicon"
-            ]
+            "pattern": "^[a-z0-9_]{2,24}$"
           },
           "minItems": 1,
           "uniqueItems": true
