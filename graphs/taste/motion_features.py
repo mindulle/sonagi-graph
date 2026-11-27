@@ -289,6 +289,14 @@ def _analyze_frames(
     }
 
 
+def _pixels(image: Image.Image) -> list[Any]:
+    """Pillow 14 호환 픽셀 목록 반환(get_flattened_data 우선, 구버전 getdata 폴백)."""
+    getter = getattr(image, "get_flattened_data", None)
+    if callable(getter):
+        return list(getter())
+    return list(image.getdata())
+
+
 def _compute_loop_seam_diff(first: Image.Image, last: Image.Image) -> float:
     """첫 프레임과 마지막 프레임의 평균 채널 차이(0~255)."""
     if first.size != last.size:
@@ -314,7 +322,7 @@ def _compute_linear_and_peak(
         if g_curr.size != g_next.size:
             g_next = g_next.resize(g_curr.size, Image.Resampling.BILINEAR)
         diff = ImageChops.difference(g_curr, g_next)
-        pixels = list(diff.getdata())
+        pixels = _pixels(diff)
 
         weight_sum = 0.0
         wx_sum = 0.0
@@ -378,7 +386,7 @@ def _compute_linear_and_peak(
 def _estimate_border_color(frame: Image.Image) -> tuple[int, int, int]:
     """첫 프레임 테두리 픽셀에서 가장 흔한 색을 배경색으로 추정한다."""
     width, height = frame.size
-    pixels = list(frame.getdata())
+    pixels = _pixels(frame)
     border: Counter[tuple[int, int, int]] = Counter()
     for x in range(width):
         border[pixels[x]] += 1
@@ -392,7 +400,7 @@ def _estimate_border_color(frame: Image.Image) -> tuple[int, int, int]:
 def _foreground_mask(frame: Image.Image, bg: tuple[int, int, int]) -> bytearray:
     """배경색과 BG_DIFF_THRESHOLD 이상 차이나는 전경 픽셀 마스크."""
     bg_r, bg_g, bg_b = bg
-    pixels = list(frame.getdata())
+    pixels = _pixels(frame)
     mask = bytearray(len(pixels))
     for idx, (r, g, b) in enumerate(pixels):
         if (
