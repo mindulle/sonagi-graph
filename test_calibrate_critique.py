@@ -42,13 +42,21 @@ class TestCalibrateCritique(unittest.TestCase):
                     {"axis_id": ax, "verdict": "A" if i == 0 else "TIE"}
                     for i, ax in enumerate(axes)
                 ],
-                "swap": {"verdict": "B" if subset[sample_ids[0]]["gold"]["verdict"] == "A" else "A"},
+                "swap": {
+                    "verdict": "B"
+                    if subset[sample_ids[0]]["gold"]["verdict"] == "A"
+                    else "A"
+                },
             },
             sample_ids[1]: {
                 "id": sample_ids[1],
-                "verdict": "A",
+                "verdict": subset[sample_ids[1]]["gold"]["verdict"],
                 "axis_verdicts": {ax: "A" for ax in axes},
-                "swap": {"verdict": "B"},
+                "swap": {
+                    "verdict": (
+                        "B" if subset[sample_ids[1]]["gold"]["verdict"] == "A" else "A"
+                    )
+                },
             },
             sample_ids[2]: {
                 "id": sample_ids[2],
