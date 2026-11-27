@@ -24,7 +24,11 @@ from graphs.design_critique_graph import (
 
 
 def _extract_axis_id(prompt_value) -> str:
-    text = prompt_value.to_string() if hasattr(prompt_value, "to_string") else str(prompt_value)
+    text = (
+        prompt_value.to_string()
+        if hasattr(prompt_value, "to_string")
+        else str(prompt_value)
+    )
     for ax in (
         "brief_fit",
         "concept_logic",
@@ -43,7 +47,11 @@ def _extract_axis_id(prompt_value) -> str:
 
 
 def _is_swapped_call(prompt_value) -> bool:
-    text = prompt_value.to_string() if hasattr(prompt_value, "to_string") else str(prompt_value)
+    text = (
+        prompt_value.to_string()
+        if hasattr(prompt_value, "to_string")
+        else str(prompt_value)
+    )
     marker_a = "[A] 후보:\n"
     marker_b = "\n\n[B] 후보:"
     idx_a = text.find(marker_a)
@@ -80,8 +88,14 @@ def install_stub(monkeypatch):
     captured = {"calls": []}
 
     def _install(resolver):
-        def _fake_get_llm(model_name=None, temperature=0.1):
-            captured["calls"].append({"model_name": model_name, "temperature": temperature})
+        def _fake_get_llm(model_name=None, temperature=0.1, timeout=45):
+            captured["calls"].append(
+                {
+                    "model_name": model_name,
+                    "temperature": temperature,
+                    "timeout": timeout,
+                }
+            )
             return _StubCritiqueLLM(resolver)
 
         monkeypatch.setattr(mod, "get_llm", _fake_get_llm)
@@ -94,7 +108,9 @@ def _assert_no_numeric_scores(obj, path="root"):
     forbidden_keys = {"score", "scores", "rating", "ratings", "points", "total_score"}
     if isinstance(obj, dict):
         for k, v in obj.items():
-            assert k.lower() not in forbidden_keys, f"Forbidden score field at {path}.{k}"
+            assert k.lower() not in forbidden_keys, (
+                f"Forbidden score field at {path}.{k}"
+            )
             _assert_no_numeric_scores(v, f"{path}.{k}")
     elif isinstance(obj, list):
         for i, item in enumerate(obj):
@@ -227,8 +243,18 @@ def test_print_asset_uses_rules_only_without_judgement_axes(install_stub):
         {
             "brief": "명함 인쇄",
             "asset_type": "print",
-            "candidate_a": {"id": "A", "bleed_mm": 3, "color_mode": "CMYK", "paper_weight_gsm": 300},
-            "candidate_b": {"id": "B", "bleed_mm": 0, "color_mode": "RGB", "paper_weight_gsm": 300},
+            "candidate_a": {
+                "id": "A",
+                "bleed_mm": 3,
+                "color_mode": "CMYK",
+                "paper_weight_gsm": 300,
+            },
+            "candidate_b": {
+                "id": "B",
+                "bleed_mm": 0,
+                "color_mode": "RGB",
+                "paper_weight_gsm": 300,
+            },
         }
     )
 
@@ -243,7 +269,9 @@ def test_print_asset_uses_rules_only_without_judgement_axes(install_stub):
 def test_configurable_model_prompt_and_material_index(install_stub, tmp_path):
     mat_file = tmp_path / "materials.json"
     mat_file.write_text(
-        json.dumps([{"id": "m1", "tags": ["minimal"], "note": "여백 참고"}], ensure_ascii=False),
+        json.dumps(
+            [{"id": "m1", "tags": ["minimal"], "note": "여백 참고"}], ensure_ascii=False
+        ),
         encoding="utf-8",
     )
 
@@ -297,7 +325,9 @@ def test_rules_schema_and_40_plus_executable_rules():
     executable = [
         r for r in landing["rules"] if r.get("checkable_by") in ("grep", "ast", "token")
     ]
-    assert len(executable) >= 40, f"Expected >= 40 executable rules, got {len(executable)}"
+    assert len(executable) >= 40, (
+        f"Expected >= 40 executable rules, got {len(executable)}"
+    )
 
     for fname in ("landing.json", "logo.json", "print.json"):
         data = json.loads((rules_dir / fname).read_text(encoding="utf-8"))
@@ -426,8 +456,12 @@ def test_no_subprocess_in_design_critique():
         ],
     }
     files = {
-        "graphs/design_critique_graph.py": (root / "graphs" / "design_critique_graph.py").read_text(encoding="utf-8"),
-        "graphs/design_critique_rules.py": (root / "graphs" / "design_critique_rules.py").read_text(encoding="utf-8"),
+        "graphs/design_critique_graph.py": (
+            root / "graphs" / "design_critique_graph.py"
+        ).read_text(encoding="utf-8"),
+        "graphs/design_critique_rules.py": (
+            root / "graphs" / "design_critique_rules.py"
+        ).read_text(encoding="utf-8"),
     }
     findings, _ = evaluate_ruleset_for_candidate(
         {"id": "repo", "source_files": files}, "repo", ruleset
@@ -546,3 +580,205 @@ def test_false_positive_tuning_graph_50_four_cases():
         f.get("rule_id") == "motion.transition.all" and "ReadingProgress.tsx" in f["location"]
         for f in findings
     )
+
+
+# --------------------------------------------------------------------------- #
+# 비전 입력 (GRAPH-49): 후보 이미지는 라벨 붙은 블록으로, 경로는 텍스트에서 제거
+# --------------------------------------------------------------------------- #
+
+
+class _VisionCaptureLLM:
+    """프롬프트 값을 그대로 모으는 스텁. 이미지 블록 검사용."""
+
+    def __init__(self, sink):
+        self.sink = sink
+
+    def with_structured_output(self, schema):
+        assert schema is AxisJudgementOutput
+
+        def _call(prompt_value):
+            self.sink.append(prompt_value)
+            return AxisJudgementOutput(
+                winner="TIE", rationale="vision stub", findings=[]
+            )
+
+        return RunnableLambda(_call)
+
+
+def _install_vision_capture(monkeypatch):
+    captured = []
+    monkeypatch.setattr(
+        mod,
+        "get_llm",
+        lambda model_name=None, temperature=0.1, timeout=45: _VisionCaptureLLM(
+            captured
+        ),
+    )
+    return captured
+
+
+def _write_png(path, color):
+    from PIL import Image
+
+    Image.new("RGB", (24, 24), color).save(path)
+    return path
+
+
+def _human_content(prompt_value):
+    messages = getattr(prompt_value, "messages", None) or []
+    humans = [m for m in messages if getattr(m, "type", "") == "human"]
+    assert humans, "human 메시지가 없습니다"
+    return humans[-1].content
+
+
+def _text_of(content):
+    if isinstance(content, str):
+        return content
+    return "\n".join(
+        block.get("text", "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
+def _image_urls(content):
+    if isinstance(content, str):
+        return []
+    return [
+        block["image_url"]["url"]
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "image_url"
+    ]
+
+
+def test_images_are_labeled_blocks_and_paths_are_stripped(tmp_path, monkeypatch):
+    a_png = _write_png(tmp_path / "a.png", (200, 30, 30))
+    b_png = _write_png(tmp_path / "b.png", (30, 30, 200))
+    captured = _install_vision_capture(monkeypatch)
+
+    result = mod.graph.invoke(
+        {
+            "brief": "비전 테스트",
+            "asset_type": "unknown_type",
+            "candidate_a": {"id": "A", "image": str(a_png)},
+            "candidate_b": {"id": "B", "image": str(b_png)},
+            "config": {"swap_check": False},
+        }
+    )
+
+    assert result["output"]["verdict"] == "TIE"
+    assert len(captured) == 4  # 4 core axes, swap off
+    for prompt_value in captured:
+        content = _human_content(prompt_value)
+        assert isinstance(content, list)
+        text = _text_of(content)
+        assert str(a_png) not in text and "a.png" not in text
+        assert str(b_png) not in text and "b.png" not in text
+        assert '"image":' not in text
+        urls = _image_urls(content)
+        assert len(urls) == 2
+        assert all(url.startswith("data:image/png;base64,") for url in urls)
+        labels = [
+            block["text"]
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        assert labels[-2:] == ["[A] 첨부 이미지 1", "[B] 첨부 이미지 1"]
+
+
+def test_images_follow_candidate_when_slots_swap(tmp_path, monkeypatch):
+    a_png = _write_png(tmp_path / "a.png", (255, 0, 0))
+    b_png = _write_png(tmp_path / "b.png", (0, 0, 255))
+    captured = _install_vision_capture(monkeypatch)
+
+    mod.graph.invoke(
+        {
+            "brief": "스왑",
+            "asset_type": "unknown_type",
+            "candidate_a": {"id": "A", "image": str(a_png)},
+            "candidate_b": {"id": "B", "image": str(b_png)},
+        }
+    )
+
+    a_url = mod.resolve_image_url(str(a_png), tmp_path)
+    b_url = mod.resolve_image_url(str(b_png), tmp_path)
+    seen_swapped = 0
+    for prompt_value in captured:
+        content = _human_content(prompt_value)
+        text = _text_of(content)
+        urls = _image_urls(content)
+        assert len(urls) == 2
+        # 첫 슬롯(B)의 텍스트가 "id": "B"면 스왑 호출이다.
+        swapped = '"id": "B"' in text.split("[B] 후보:")[0]
+        if swapped:
+            seen_swapped += 1
+            assert urls[0] == b_url
+            assert urls[1] == a_url
+        else:
+            assert urls[0] == a_url
+            assert urls[1] == b_url
+    assert seen_swapped == 4
+
+
+def test_missing_image_yields_needs_human_with_reason(tmp_path, monkeypatch):
+    _install_vision_capture(monkeypatch)
+    result = mod.graph.invoke(
+        {
+            "brief": "없는 파일",
+            "asset_type": "unknown_type",
+            "candidate_a": {"id": "A", "image": str(tmp_path / "nope.png")},
+            "candidate_b": {"id": "B"},
+            "config": {"swap_check": False},
+        }
+    )
+
+    assert result["verdict"] == "NEEDS_HUMAN"
+    rationales = [ax["rationale"] for ax in result["output"]["axes"]]
+    assert all("이미지 파일이 없습니다" in r for r in rationales)
+    assert all(ax["verdict"] == "NEEDS_HUMAN" for ax in result["output"]["axes"])
+
+
+def test_image_helper_rejects_svg_and_passes_data_uri(tmp_path):
+    from graphs.design_critique_graph import CritiqueImageError
+
+    svg = tmp_path / "mark.svg"
+    svg.write_text("<svg xmlns='http://www.w3.org/2000/svg'/>", encoding="utf-8")
+    with pytest.raises(CritiqueImageError):
+        mod.resolve_image_url(str(svg), tmp_path)
+
+    data_uri = "data:image/png;base64,AAAA"
+    assert mod.resolve_image_url(data_uri, tmp_path) == data_uri
+    assert mod.resolve_image_url({"url": "https://example.com/a.png"}, tmp_path) == (
+        "https://example.com/a.png"
+    )
+
+
+def test_text_only_candidates_keep_string_content(tmp_path, monkeypatch):
+    captured = _install_vision_capture(monkeypatch)
+    mod.graph.invoke(
+        {
+            "brief": "텍스트만",
+            "asset_type": "unknown_type",
+            "candidate_a": {"id": "A"},
+            "candidate_b": {"id": "B"},
+            "config": {"swap_check": False},
+        }
+    )
+    assert captured
+    assert all(isinstance(_human_content(pv), str) for pv in captured)
+
+
+def test_too_many_images_returns_needs_human(tmp_path, monkeypatch):
+    _install_vision_capture(monkeypatch)
+    pngs = [str(_write_png(tmp_path / f"{i}.png", (i, 0, 0))) for i in range(5)]
+    result = mod.graph.invoke(
+        {
+            "brief": "이미지 5장",
+            "asset_type": "unknown_type",
+            "candidate_a": {"id": "A", "images": pngs},
+            "candidate_b": {"id": "B"},
+            "config": {"swap_check": False},
+        }
+    )
+    assert result["verdict"] == "NEEDS_HUMAN"
+    assert any("넘습니다" in ax["rationale"] for ax in result["output"]["axes"])

@@ -9,10 +9,13 @@
   - A/B 자리를 바꿔 재판정한 결론이 뒤집히면 NEEDS_HUMAN.
 - 규칙 층(JSON 룰셋)과 판정 층(LLM 루브릭)을 분리하며, 게이트로 후보를 떨어뜨리지 않는다.
 - 모델·프롬프트·재료 인덱스 경로·축 팩 경로·룰셋 경로는 모두 설정/환경변수로 교체 가능하다.
+- 후보 dict의 `image`/`image_path`/`image_url`/`images`는 비전 블록으로 첨부한다.
+  경로 문자열은 프롬프트 텍스트에서 제거해 축·파일명이 판정에 새지 않게 한다.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import operator
 import os
@@ -20,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
+from langchain_core.messages import HumanMessage
+from langchain_core.prompt_values import ChatPromptValue
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
@@ -36,6 +41,14 @@ Severity = Literal["blocker", "major", "minor"]
 
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parent / "config" / "design_critique"
 
+IMAGE_FIELD_NAMES = ("image", "image_path", "image_url", "images", "image_paths")
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_IMAGES_PER_CANDIDATE = 4
+
+
+class CritiqueImageError(RuntimeError):
+    """후보 이미지를 판정 메시지에 넣을 수 없을 때."""
+
 
 @dataclass(frozen=True)
 class DesignCritiqueSettings:
@@ -50,6 +63,9 @@ class DesignCritiqueSettings:
     system_template: Optional[str] = None
     user_template: Optional[str] = None
     swap_check: bool = True
+    image_base_dir: Path = Path(".")
+    max_images_per_candidate: int = MAX_IMAGES_PER_CANDIDATE
+    llm_timeout_sec: int = 45
 
 
 def resolve_settings(config: Optional[Dict[str, Any]] = None) -> DesignCritiqueSettings:
@@ -76,6 +92,21 @@ def resolve_settings(config: Optional[Dict[str, Any]] = None) -> DesignCritiqueS
     )
     material_index_path = Path(raw_material) if raw_material else None
 
+    raw_image_base = (
+        cfg.get("image_base_dir")
+        or os.environ.get("DESIGN_CRITIQUE_IMAGE_BASE_DIR")
+        or "."
+    )
+    image_base_dir = Path(raw_image_base).expanduser()
+    if not image_base_dir.is_absolute():
+        image_base_dir = (Path.cwd() / image_base_dir).resolve()
+
+    timeout_sec = int(
+        cfg.get("llm_timeout_sec")
+        or os.environ.get("DESIGN_CRITIQUE_LLM_TIMEOUT")
+        or 45
+    )
+
     return DesignCritiqueSettings(
         axis_packs_dir=axis_packs_dir,
         rules_dir=rules_dir,
@@ -86,6 +117,11 @@ def resolve_settings(config: Optional[Dict[str, Any]] = None) -> DesignCritiqueS
         system_template=cfg.get("system_template") or cfg.get("prompt_template"),
         user_template=cfg.get("user_template"),
         swap_check=bool(cfg.get("swap_check", True)),
+        image_base_dir=image_base_dir,
+        max_images_per_candidate=int(
+            cfg.get("max_images_per_candidate", MAX_IMAGES_PER_CANDIDATE)
+        ),
+        llm_timeout_sec=timeout_sec,
     )
 
 
@@ -193,18 +229,26 @@ def load_axis_pack(
     """공통 4축 + 자산별 보조 축 팩을 로드한다."""
     common_data = _read_json(axis_packs_dir / "common.json") or {}
     common_axes = [
-        ax for ax in common_data.get("axes", []) if isinstance(ax, dict) and ax.get("id")
+        ax
+        for ax in common_data.get("axes", [])
+        if isinstance(ax, dict) and ax.get("id")
     ]
 
     normalized_type = (asset_type or "").strip().lower()
-    pack_data = _read_json(axis_packs_dir / f"{normalized_type}.json") if normalized_type else None
+    pack_data = (
+        _read_json(axis_packs_dir / f"{normalized_type}.json")
+        if normalized_type
+        else None
+    )
 
     if pack_data:
         mode = str(pack_data.get("mode", "axes"))
         if mode == "rules_only":
             return [], "rules_only"
         extra_axes = [
-            ax for ax in pack_data.get("axes", []) if isinstance(ax, dict) and ax.get("id")
+            ax
+            for ax in pack_data.get("axes", [])
+            if isinstance(ax, dict) and ax.get("id")
         ]
         return common_axes + extra_axes, mode
 
@@ -218,7 +262,10 @@ def load_ruleset(asset_type: str, rules_dir: Path) -> Dict[str, Any]:
         specific = _read_json(rules_dir / f"{normalized_type}.json")
         if specific is not None:
             return specific
-    return _read_json(rules_dir / "default.json") or {"asset_type": "default", "rules": []}
+    return _read_json(rules_dir / "default.json") or {
+        "asset_type": "default",
+        "rules": [],
+    }
 
 
 def load_prompts(
@@ -309,12 +356,17 @@ def aggregate_axis_verdicts(verdicts: List[str]) -> Verdict:
     return "NEEDS_HUMAN"
 
 
-def get_llm(model_name: Optional[str] = None, temperature: float = 0.1):
+def get_llm(
+    model_name: Optional[str] = None,
+    temperature: float = 0.1,
+    timeout: int = 45,
+):
     """크리틱 프록시 클라이언트. 모델은 DESIGN_CRITIQUE_LLM_MODEL 또는 config로 바꾼다."""
     return chat_model(
         "DESIGN_CRITIQUE_LLM_MODEL",
         default_model=model_name,
         temperature=temperature,
+        timeout=timeout,
     )
 
 
@@ -386,8 +438,118 @@ def route_to_axes(state: DesignCritiqueState):
     ]
 
 
+def extract_image_refs(candidate: Dict[str, Any]) -> List[Any]:
+    """후보 dict에서 이미지 참조를 문서 순서대로 모은다."""
+    refs: List[Any] = []
+    for key in ("image", "image_path", "image_url"):
+        if candidate.get(key):
+            refs.append(candidate[key])
+    for key in ("images", "image_paths"):
+        value = candidate.get(key)
+        if isinstance(value, (list, tuple)):
+            refs.extend(v for v in value if v)
+    return refs
+
+
+def strip_image_fields(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    """텍스트 프롬프트에 파일 경로가 새지 않도록 이미지 필드만 뺀 사본."""
+    return {k: v for k, v in candidate.items() if k not in IMAGE_FIELD_NAMES}
+
+
+def _image_ref_value(ref: Any) -> str:
+    if isinstance(ref, str) and ref.strip():
+        return ref.strip()
+    if isinstance(ref, dict):
+        for key in ("url", "path", "image", "image_url"):
+            value = ref.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    raise CritiqueImageError(f"이미지 참조를 해석할 수 없습니다: {ref!r}")
+
+
+def _sniff_image_mime(path: Path) -> str:
+    head = path.read_bytes()[:12]
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if head.startswith(b"\xff\xd8"):
+        return "image/jpeg"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    if head[:4] == b"GIF8":
+        return "image/gif"
+    raise CritiqueImageError(
+        f"지원하지 않는 이미지 형식입니다(PNG/JPEG/WebP/GIF만): {path}"
+    )
+
+
+def resolve_image_url(ref: Any, base_dir: Path) -> str:
+    """이미지 참조를 data URI 또는 http(s) URL로 정규화한다."""
+    value = _image_ref_value(ref)
+    if value.startswith(("data:image/", "http://", "https://")):
+        return value
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = (base_dir / path).resolve()
+    if not path.is_file():
+        raise CritiqueImageError(f"이미지 파일이 없습니다: {path}")
+    if path.stat().st_size > MAX_IMAGE_BYTES:
+        raise CritiqueImageError(
+            f"이미지가 너무 큽니다({MAX_IMAGE_BYTES} bytes 초과): {path}"
+        )
+    mime = _sniff_image_mime(path)
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
+def image_content_blocks(
+    candidate: Dict[str, Any],
+    label: str,
+    base_dir: Path,
+    max_images: int = MAX_IMAGES_PER_CANDIDATE,
+) -> List[Dict[str, Any]]:
+    """후보 이미지를 라벨이 붙은 비전 블록으로 만든다."""
+    refs = extract_image_refs(candidate)
+    if len(refs) > max_images:
+        raise CritiqueImageError(
+            f"후보 {label} 이미지가 {max_images}장을 넘습니다: {len(refs)}"
+        )
+    blocks: List[Dict[str, Any]] = []
+    for idx, ref in enumerate(refs, 1):
+        blocks.append({"type": "text", "text": f"[{label}] 첨부 이미지 {idx}"})
+        blocks.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": resolve_image_url(ref, base_dir)},
+            }
+        )
+    return blocks
+
+
+def attach_image_blocks(messages: List[Any], blocks: List[Dict[str, Any]]) -> List[Any]:
+    """마지막 human 메시지 뒤에 비전 블록을 붙인다. 이미지가 없으면 그대로."""
+    if not blocks:
+        return messages
+    out = list(messages)
+    for i in range(len(out) - 1, -1, -1):
+        if getattr(out[i], "type", "") != "human":
+            continue
+        content = out[i].content
+        if isinstance(content, str):
+            new_content = [{"type": "text", "text": content}, *blocks]
+        elif isinstance(content, list):
+            new_content = [*content, *blocks]
+        else:
+            new_content = [{"type": "text", "text": str(content)}, *blocks]
+        out[i] = out[i].model_copy(update={"content": new_content})
+        return out
+    out.append(HumanMessage(content=blocks))
+    return out
+
+
 def _invoke_axis_pair(
     evaluator: Any,
+    prompt: ChatPromptTemplate,
+    settings: DesignCritiqueSettings,
     axis: Dict[str, Any],
     brief: str,
     materials: List[Dict[str, Any]],
@@ -396,19 +558,35 @@ def _invoke_axis_pair(
     second_label: str,
     second_candidate: Dict[str, Any],
 ) -> AxisJudgementOutput:
-    return evaluator.invoke(
-        {
-            "axis_id": axis.get("id", ""),
-            "axis_label": axis.get("label", axis.get("id", "")),
-            "rubric": axis.get("rubric", ""),
-            "brief": brief or "(브리프 미제공)",
-            "materials": json.dumps(materials, ensure_ascii=False) if materials else "[]",
-            "first_label": first_label,
-            "first_candidate": json.dumps(first_candidate, ensure_ascii=False),
-            "second_label": second_label,
-            "second_candidate": json.dumps(second_candidate, ensure_ascii=False),
-        }
+    variables = {
+        "axis_id": axis.get("id", ""),
+        "axis_label": axis.get("label", axis.get("id", "")),
+        "rubric": axis.get("rubric", ""),
+        "brief": brief or "(브리프 미제공)",
+        "materials": json.dumps(materials, ensure_ascii=False) if materials else "[]",
+        "first_label": first_label,
+        "first_candidate": json.dumps(
+            strip_image_fields(first_candidate), ensure_ascii=False
+        ),
+        "second_label": second_label,
+        "second_candidate": json.dumps(
+            strip_image_fields(second_candidate), ensure_ascii=False
+        ),
+    }
+    messages = prompt.format_messages(**variables)
+    blocks = image_content_blocks(
+        first_candidate,
+        first_label,
+        settings.image_base_dir,
+        settings.max_images_per_candidate,
+    ) + image_content_blocks(
+        second_candidate,
+        second_label,
+        settings.image_base_dir,
+        settings.max_images_per_candidate,
     )
+    messages = attach_image_blocks(messages, blocks)
+    return evaluator.invoke(ChatPromptValue(messages=messages))
 
 
 def judge_axis(state: AxisTaskState) -> Dict[str, Any]:
@@ -417,9 +595,15 @@ def judge_axis(state: AxisTaskState) -> Dict[str, Any]:
     settings = resolve_settings(state.get("config"))
     system_tpl, user_tpl = load_prompts(settings.prompts_path, settings)
 
-    prompt = ChatPromptTemplate.from_messages([("system", system_tpl), ("user", user_tpl)])
-    llm = get_llm(model_name=settings.model_name, temperature=settings.temperature)
-    evaluator = prompt | llm.with_structured_output(AxisJudgementOutput)
+    prompt = ChatPromptTemplate.from_messages(
+        [("system", system_tpl), ("user", user_tpl)]
+    )
+    llm = get_llm(
+        model_name=settings.model_name,
+        temperature=settings.temperature,
+        timeout=settings.llm_timeout_sec,
+    )
+    evaluator = llm.with_structured_output(AxisJudgementOutput)
 
     cand_a = state.get("candidate_a") or {}
     cand_b = state.get("candidate_b") or {}
@@ -428,7 +612,16 @@ def judge_axis(state: AxisTaskState) -> Dict[str, Any]:
 
     try:
         forward_res = _invoke_axis_pair(
-            evaluator, axis, brief, materials, "A", cand_a, "B", cand_b
+            evaluator,
+            prompt,
+            settings,
+            axis,
+            brief,
+            materials,
+            "A",
+            cand_a,
+            "B",
+            cand_b,
         )
         forward_winner: Verdict = forward_res.winner
         rationale = forward_res.rationale
@@ -459,7 +652,16 @@ def judge_axis(state: AxisTaskState) -> Dict[str, Any]:
     if settings.swap_check:
         try:
             swapped_res = _invoke_axis_pair(
-                evaluator, axis, brief, materials, "A", cand_b, "B", cand_a
+                evaluator,
+                prompt,
+                settings,
+                axis,
+                brief,
+                materials,
+                "A",
+                cand_b,
+                "B",
+                cand_a,
             )
             swapped_raw: Verdict = swapped_res.winner
             swapped_mapped = map_swapped_choice(swapped_raw)
@@ -526,7 +728,9 @@ def synthesizer(state: DesignCritiqueState) -> Dict[str, Any]:
         swapped_verdict_mapped = aggregate_axis_verdicts(
             [str(r.get("swapped_winner_mapped", "NEEDS_HUMAN")) for r in axis_results]
         )
-        all_axes_swap_consistent = all(bool(r.get("swap_consistent", False)) for r in axis_results)
+        all_axes_swap_consistent = all(
+            bool(r.get("swap_consistent", False)) for r in axis_results
+        )
         swap_consistent = (
             forward_verdict == swapped_verdict_mapped and all_axes_swap_consistent
         )
