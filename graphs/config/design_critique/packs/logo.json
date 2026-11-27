@@ -7,7 +7,7 @@
       "id": "logotype",
       "label": "로고타입",
       "layer": "pack",
-      "rubric": "심볼과 워드마크(로고타입)의 자간, 커닝, 무게 중심 및 조화를 비교한다."
+      "rubric": "JSON의 description에 워드마크 서체, 자간, 커닝, 심볼-타입 비례 및 무게 중심 차이가 명시적으로 기술된 경우에만 우열을 판정한다. 워드마크 관련 기술이 동일하거나 언급이 없으면 추측하지 말고 반드시 TIE로 판정한다."
     },
     {
       "id": "small_scale_legibility",
