@@ -1,0 +1,37 @@
+{
+  "id": "real_logo_01",
+  "brief": "소규모 디자인 공방의 원형 마스터 씰. 인쇄 각인·웹 파비콘·굿즈에 두루 쓰며, 12~16px 축소에서도 형태가 남아야 한다. 톤은 차분하고 수공예적이다.",
+  "asset_type": "logo",
+  "candidate_a": {
+    "description": "방사형 나선과 씨앗 형태를 얇은 선으로 그린 원형 씰. 외곽에 점선 링을 두르고, 하단 호를 따라 작은 대문자 문구를 배치했다. 주황·검정·크림 3색.",
+    "colors": [
+      "#E4A23C",
+      "#2B2B2B",
+      "#F7F1E6"
+    ],
+    "min_size_px": 16,
+    "versions": [
+      "symbol_only",
+      "monochrome",
+      "favicon"
+    ],
+    "concept_sentence": "민들레 씨앗이 흩어지는 운동을 방사형 나선으로 고정한다."
+  },
+  "candidate_b": {
+    "description": "아치형 창 안에 방사형 꽃과 잎을 둔 우드컷 스타일 씰. 상단 호를 따라 굵은 대문자 워드마크, 하단에 작은 문구를 배치했다. 적갈·검정·크림 3색.",
+    "colors": [
+      "#A6402A",
+      "#1E1E1E",
+      "#F7F1E6"
+    ],
+    "min_size_px": 16,
+    "versions": [
+      "horizontal",
+      "monochrome",
+      "inverse"
+    ],
+    "concept_sentence": "수공예 도장의 인상을 아치 프레임과 굵은 활자로 만든다."
+  },
+  "gold": null,
+  "source_note": "민들레 디자인 시스템 마스터 씰 파일럿 2안(01_master_seal/light). 자체 자산이라 라이선스 제약 없음. 비전 입력 검증용. gold는 사람이 확정한다."
+}
