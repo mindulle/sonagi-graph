@@ -35,5 +35,5 @@
     "format": "png"
   },
   "gold": null,
-  "source_note": "mindulle-brand#16: 01_master_seal/light/master-symbol-light.png vs pilot-option1-golden-spiral.png"
+  "source_note": "mindulle-brand#16: 마스터 심볼 vs 파일럿 1안\ncandidate_a image: /home/ubuntu/mindulle-design-system/packages/brand-assets/01_master_seal/light/master-symbol-light.png\ncandidate_b image: /home/ubuntu/mindulle-design-system/packages/brand-assets/01_master_seal/light/pilot-option1-golden-spiral.png"
 }

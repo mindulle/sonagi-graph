@@ -34,5 +34,5 @@
     "format": "png"
   },
   "gold": null,
-  "source_note": "mindulle-brand#16: 04_touchpoints/social_cards/social-card-light.png vs social-card-dark.png"
+  "source_note": "mindulle-brand#16: 소셜 카드 라이트 vs 다크\ncandidate_a image: /home/ubuntu/mindulle-design-system/packages/brand-assets/04_touchpoints/social_cards/social-card-light.png\ncandidate_b image: /home/ubuntu/mindulle-design-system/packages/brand-assets/04_touchpoints/social_cards/social-card-dark.png"
 }
