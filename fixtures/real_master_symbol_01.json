@@ -1,0 +1,39 @@
+{
+  "id": "real_master_symbol_01",
+  "brief": "소규모 디자인 공방의 원형 마스터 씰. 인쇄 각인·웹 파비콘·굿즈에 두루 쓰며 12~16px 축소에서도 형태가 남아야 한다. 톤은 차분하고 수공예적이다.",
+  "asset_type": "logo",
+  "candidate_a": {
+    "description": "120x120 정사각 영역에 2px 수직 줄기, 하단 물방울형 앰버 씨앗 코어, 상단 7방향 방사선 깃털과 잔털 선화, 점선 반원 아크, 옅은 원형 후광으로 구성된 심볼 단독 마크.",
+    "colors": [
+      "#161616",
+      "#D97706",
+      "#F59E0B"
+    ],
+    "min_size_px": 16,
+    "versions": [
+      "symbol_only",
+      "monochrome",
+      "favicon"
+    ],
+    "concept_sentence": "2px 수직 줄기 위에 7갈래 민들레 홀씨 깃털과 황금 씨앗을 배치해 공방의 중심축과 생명력을 담는다.",
+    "format": "png"
+  },
+  "candidate_b": {
+    "description": "미색 원형 바탕(#FAF8F5)에 먹색 외곽선과 점선 내부 링, 상하 원호 세리프·모노 영문 레터링, 황금비 나선 곡선과 방사형 민들레 홀씨가 결합된 원형 씰.",
+    "colors": [
+      "#1C1514",
+      "#FAF8F5",
+      "#D97706",
+      "#9A3412"
+    ],
+    "min_size_px": 16,
+    "versions": [
+      "symbol_only",
+      "monochrome"
+    ],
+    "concept_sentence": "황금 나선 바람결이 원형 링 안의 민들레 홀씨를 감싸며 공방 인장을 이룬다.",
+    "format": "png"
+  },
+  "gold": null,
+  "source_note": "mindulle-brand#16: 마스터 심볼 vs 파일럿 1안\ncandidate_a image: /home/ubuntu/mindulle-design-system/packages/brand-assets/01_master_seal/light/master-symbol-light.png\ncandidate_b image: /home/ubuntu/mindulle-design-system/packages/brand-assets/01_master_seal/light/pilot-option1-golden-spiral.png"
+}

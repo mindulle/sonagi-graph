@@ -1,0 +1,38 @@
+{
+  "id": "real_social_card_01",
+  "brief": "소규모 디자인 공방의 Open Graph 소셜 공유 카드(1200x630). 좌측 원형 씰과 우측 세리프 타이틀·슬로건·설명을 배치해 링크 미리보기에서 공방의 정체성과 차분한 활판 인쇄 톤을 전달한다.",
+  "asset_type": "logo",
+  "candidate_a": {
+    "description": "미색 바탕(#FAF8F5)과 옅은 40px 격자, 2.5px 먹색(#1C1514) 외곽 테두리 및 수직 구분선, 좌측 원형 마스터 씰, 우측 앰버 배지·세리프 타이틀(MINDULLE STUDIO)·슬로건·2줄 설명·하단 4개 태그 배지로 구성된 라이트 소셜 카드.",
+    "colors": [
+      "#FAF8F5",
+      "#1C1514",
+      "#D97706",
+      "#B45309"
+    ],
+    "min_size_px": 120,
+    "versions": [
+      "horizontal"
+    ],
+    "concept_sentence": "미색 신문용지와 먹색 실선 위에 공방 인장과 타이포그래피를 얹은 활판 인쇄 톤 소셜 카드.",
+    "format": "png"
+  },
+  "candidate_b": {
+    "description": "어두운 바탕(#060911)과 격자(#161B26), #30363D 2px 외곽 테두리, 좌측 청·금색 오라를 띤 다크 마스터 씰, 우측 금색 배지·흰색 세리프 타이틀(MINDULLE STUDIO)·슬로건·2줄 설명·하단 4개 태그 배지로 구성된 다크 소셜 카드.",
+    "colors": [
+      "#060911",
+      "#FFFFFF",
+      "#FFD166",
+      "#4A90E2"
+    ],
+    "min_size_px": 120,
+    "versions": [
+      "horizontal",
+      "inverse"
+    ],
+    "concept_sentence": "어두운 바탕 위 발광 오라와 금색·청색 포인트로 문진 인장을 부각한 다크 소셜 카드.",
+    "format": "png"
+  },
+  "gold": null,
+  "source_note": "mindulle-brand#16: 소셜 카드 라이트 vs 다크\ncandidate_a image: /home/ubuntu/mindulle-design-system/packages/brand-assets/04_touchpoints/social_cards/social-card-light.png\ncandidate_b image: /home/ubuntu/mindulle-design-system/packages/brand-assets/04_touchpoints/social_cards/social-card-dark.png"
+}
