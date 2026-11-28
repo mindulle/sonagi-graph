@@ -1,0 +1,43 @@
+{
+  "id": "real_favicon_01",
+  "brief": "소규모 디자인 공방의 16px·32px 웹 파비콘 심볼. 브라우저 탭·북마크 등 12~32px 극소 축소에서도 형태가 뭉개지지 않고 한눈에 식별되어야 한다. 톤은 차분하고 수공예적이다.",
+  "asset_type": "logo",
+  "candidate_a": {
+    "description": "16x16 및 32x32 캔버스에 1.75px 두께의 3~5방향 방사형 직선 깃털, 상단을 잇는 1~1.25px 점선 호(opacity 0.65~0.75), 2px 수직 줄기, 하단 물방울형 앰버 씨앗을 배치한 파비콘.",
+    "colors": [
+      "#161616",
+      "#D97706",
+      "#F7EEEC",
+      "#F59E0B"
+    ],
+    "min_size_px": 16,
+    "versions": [
+      "favicon",
+      "symbol_only",
+      "monochrome",
+      "inverse"
+    ],
+    "concept_sentence": "민들레 홀씨의 깃털과 점선 바람 호, 2px 줄기, 황금 씨앗을 극소형 캔버스에 옮긴 파비콘.",
+    "format": "svg"
+  },
+  "candidate_b": {
+    "description": "16x16 픽셀 그리드에 맞춰 반투명 점선 호를 제거하고, 2.5px 균일 스트로크의 3방향 굵은 방사선과 2.5px 수직 줄기, 면적이 확대된 단순 물방울 씨앗 코어로만 구성한 파비콘.",
+    "colors": [
+      "#161616",
+      "#D97706",
+      "#F7EEEC",
+      "#F59E0B"
+    ],
+    "min_size_px": 12,
+    "versions": [
+      "favicon",
+      "symbol_only",
+      "monochrome",
+      "inverse"
+    ],
+    "concept_sentence": "점선과 세선을 덜어내고 2.5px 균일 굵기의 3갈래 실루엣으로 12~16px 축소 식별력을 확보한 파비콘.",
+    "format": "svg"
+  },
+  "gold": null,
+  "source_note": "mindulle-brand#16: 04_touchpoints/favicons/favicon-16.svg & favicon-32.svg vs 굵기·형태 보강안"
+}
